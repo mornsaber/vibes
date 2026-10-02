@@ -6,6 +6,7 @@ import { CHECKS, CHECK_ORDER, FACILITIES, MRO_PROVIDERS, mroById, LIFE_LIMIT_YEA
 import { airportByCode } from '../data/airports.js';
 import { clamp, fail, ok, log, money, sum } from './core.js';
 import { typeOf, ageYears, isDelivered, inDowntime, addWork, finishWork } from './fleet.js';
+import { setSchedule } from './network.js';
 
 export const LIGHT = ['A', 'B'];
 export const HEAVY = ['C', 'D'];
@@ -128,7 +129,7 @@ function startShopVisit(state, ac) {
 }
 
 function recordCheck(ac, week, check, where, cost) {
-  ac.mxLog = [{ week, check, where, cost }, ...(ac.mxLog ?? [])].slice(0, 10);
+  ac.mxLog = [{ week, check, where, cost: Math.round(cost) }, ...(ac.mxLog ?? [])].slice(0, 6);
 }
 
 const RESTORE = { A: 3, B: 6, C: 90, D: 97 };
@@ -186,7 +187,7 @@ export function maintenanceTick(state) {
     if (!ac.retired && ageYears(state, ac) >= LIFE_LIMIT_YEARS) {
       ac.retired = true;
       ac.grounded = 'Retired: airframe life limit';
-      ac.schedule = [];
+      setSchedule(state, ac, []);
       log(state, `${ac.reg} has reached its ${LIFE_LIMIT_YEARS}-year airframe life limit and is withdrawn. Sell it for scrap or return it.`, 'bad', 'engineering');
     }
     if (ac.retired || inDowntime(state, ac) || ac.booked) continue;

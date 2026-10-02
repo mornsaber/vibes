@@ -17,11 +17,16 @@ Runs entirely in the browser: no dependencies, no build step.
 ```sh
 npm start        # http://localhost:8080
 npm test         # engine test suite (node:test)
-npm run simulate # headless balance harness (scripted strategies)
+npm run simulate # headless balance harness (scripted strategies; SEED=n)
+npm run profile  # performance harness: ~300 aircraft, 150 routes, 10 years
 ```
 
-Saves autosave to localStorage; export/import a save file from the game menu.
-Keyboard: <kbd>Space</kbd>/<kbd>W</kbd> week · <kbd>M</kbd> month · <kbd>Q</kbd> quarter · <kbd>Y</kbd> year.
+New players get a dismissable **first-year tutorial** (a step tracker that
+ticks off as you lease, launch, fly and grow) and every key metric has a
+plain-language tooltip. Games live in named **save slots** (gzip-compressed in
+the browser) with export/import to files, and **↶ revert** undoes your last
+time advance. Keyboard: <kbd>Space</kbd>/<kbd>W</kbd> week · <kbd>M</kbd> month ·
+<kbd>Q</kbd> quarter · <kbd>Y</kbd> year.
 
 ## Pages
 
@@ -64,9 +69,11 @@ Each page is a hash route (`#routes/rt12`, `#fleet/ac/ac3`, `#engineering/schedu
 - **People** — five workforces sized from scheduled block hours (augmented long-haul crews, premium-cabin attendants), training pipelines, regional pay, morale, attrition, unions and strikes.
 - **Traffic rights & slots** — cabotage, EU single market, fifth-freedom permits, bilateral agreements; slot-controlled and congested airports with monthly slot pools.
 - **Finance** — fuel price random walk and hedging, credit rating from leverage/liquidity/coverage, rating-dependent borrowing costs, quarterly tax with loss carry-forward, share price, equity raises and dividends.
+- **Reactive rivals** — incumbents defend their hubs when you move in (matching your fares and adding capacity for months), match undercutting elsewhere, and retreat from routes where you beat them for a sustained period. They order era-appropriate aircraft that arrive after real lead times and open new routes (often into your markets), close routes and shrink when losing money, and join or leave alliances (Star 1997, oneworld 1999, SkyTeam 2000; one member per country).
 - **Rivals** — monthly AI: finances, hostility, fare wars, capacity dumps, entry onto your profitable routes, staff poaching with better pay packages, mergers among rivals, bankruptcies, and generated startups. Buy 25% stakes (dividends + codeshare) or acquire domestic rivals outright (hubs, fleet, routes, staff); weak share prices invite hostile bids for you.
 - **Events** — 23 decisions: union claims, oil shocks, recessions, pandemics, volcanic ash, hurricanes, ATC strikes, airworthiness directives, delivery delays, pilot poaching, rival collapses, alliance invitations…
-- **The board** — quarterly reviews and yearly objectives. Zero confidence: fired. Eight weeks of negative cash: administration.
+- **The board** — quarterly reviews and yearly objectives. Zero confidence: fired.
+- **Insolvency & Chapter 11** — eight weeks of negative cash brings creditors to the door: liquidate, or file for court protection (also available voluntarily when distressed). Debt service freezes and a DIP loan funds operations; renegotiate leases (−25% rent), reject leases without penalty, force concessionary labour contracts (with strike risk), shed routes and aircraft. Emerge after a profitable stretch with unsecured debt cut 60% and secured 30%, old shareholders wiped out and a new board — or be liquidated at the 26-week deadline. Twice per game at most; can be switched off.
 
 ## Code layout
 
@@ -75,12 +82,24 @@ src/data/     airports, aircraft & check program, rivals, business data, eras, h
 src/engine/   core (rng, calendar), market, fleet, network, maintenance, staff,
               ops (weekly flow simulation), finance, rivals, contracts, safety, events,
               advisor (autopilot), brands (subsidiaries, liveries, campaigns), regulation,
-              chronicle (history), scenarios, turn (weekly turn, save migration)
-src/ui/       app shell & router, map, shared components, pages/*
-scripts/      serve.js, simulate.js (balance), build-land.js (map data)
+              chronicle (history), scenarios, rivalai (reactive rivals), restructuring
+              (Chapter 11), tutorial, turn (weekly turn, save migration)
+src/ui/       storage.js (save slots), app shell & router, map, shared components, pages/*
+scripts/      serve.js, simulate.js (balance), profile.js (performance), build-land.js (map data)
 test/         engine tests
 ```
 
-The engine is pure and deterministic per seed; state is plain JSON (save version 5;
-version-4 saves migrate automatically).
+The engine is pure and deterministic per seed; state is plain JSON (save version 6;
+version-4 and -5 saves migrate automatically, and a pre-slots save is adopted into a slot).
+
+### Performance
+
+Derived data is cached rather than saved: a per-season frequency index and route
+lookup (invalidated whenever a schedule changes), one-stop itinerary geometry
+(until the route or hub list changes), rival line-ups per market (until rival
+state changes) and the per-rival part of competitive appeal (per turn). History
+is stored compactly (6 years of weekly rows, then annual reports). On the
+`npm run profile` airline (≈300 aircraft, 150 routes, 6 hubs, ~5,000 connecting
+markets) a week takes ~55–90 ms in Node (down from ~3.8 s) and ~200 ms end-to-end
+in the browser including render and save; the largest page renders in ≈230 ms.
 Map outlines: Natural Earth 1:110m land (public domain) via world-atlas.

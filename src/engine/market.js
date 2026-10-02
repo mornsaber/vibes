@@ -101,7 +101,19 @@ export function cargoMarket(a, b) {
   return 40 * Math.sqrt(A.pop * B.pop) ** 0.9 * ((A.cargo + B.cargo) / 2) * df;
 }
 
+// Seasonality only changes week to week, so it is memoised for the current week.
+let seasonWeek = -1;
+const seasonMemo = new Map();
 function airportSeason(code, week) {
+  if (week !== seasonWeek) {
+    seasonWeek = week;
+    seasonMemo.clear();
+  }
+  let v = seasonMemo.get(code);
+  if (v === undefined) seasonMemo.set(code, (v = airportSeasonRaw(code, week)));
+  return v;
+}
+function airportSeasonRaw(code, week) {
   const ap = airportByCode[code];
   const peak = ap.lat >= 0 ? 196 : 15; // mid-July north, mid-January south
   const phase = (2 * Math.PI * (dayOfYear(week) - peak)) / 365;
@@ -154,10 +166,22 @@ export const FIFTH_FREEDOM_PERMIT = 3e6;
 
 export const rivalDef = (state, id) => rivalById[id] ?? state.newRivals?.find((r) => r.id === id);
 
+// Alliance membership is dynamic: founders join when an alliance forms, others
+// join or leave over time (rivals[id].alliance overrides the historical roster).
+export const ALLIANCE_FOUNDED = { 'Star Alliance': 1997, oneworld: 1999, SkyTeam: 2000 };
+export function rivalAlliance(state, r) {
+  const rs = state.rivals[r.id];
+  if (rs && rs.alliance !== undefined) return rs.alliance;
+  return r.alliance && yearOf(state.week) >= ALLIANCE_FOUNDED[r.alliance] ? r.alliance : null;
+}
+
+// Per-rival cache of nonstop markets, reset if the rival's base list changes.
 const nonstopCache = new Map();
 export function rivalFliesNonstop(rival, x, y) {
-  const k = `${rival.id}|${rival.hubs.join(',')}|${pairKey(x, y)}`;
-  let v = nonstopCache.get(k);
+  let c = nonstopCache.get(rival.id);
+  if (!c || c.hubs !== rival.hubs || c.n !== rival.hubs.length) nonstopCache.set(rival.id, (c = { hubs: rival.hubs, n: rival.hubs.length, map: new Map() }));
+  const k = x < y ? x + y : y + x;
+  let v = c.map.get(k);
   if (v !== undefined) return v;
   v = false;
   const t = RIVAL_TYPES[rival.type];
@@ -172,7 +196,7 @@ export function rivalFliesNonstop(rival, x, y) {
       else v = (hx && hy) || baseMarket(x, y) >= t.minMarket || other.tier >= 3;
     }
   }
-  nonstopCache.set(k, v);
+  c.map.set(k, v);
   return v;
 }
 
@@ -202,11 +226,47 @@ export function staticRivals(a, b) {
   return list;
 }
 
+// Per-turn context so repeated rivalsOn calls don't re-filter every startup.
+export function rivalsContext(state, { memo = true } = {}) {
+  const byAirport = new Map();
+  for (const r of state.newRivals ?? []) {
+    if (state.rivals[r.id]?.status !== 'active') continue;
+    for (const h of r.hubs) {
+      if (!byAirport.has(h)) byAirport.set(h, []);
+      byAirport.get(h).push(r);
+    }
+  }
+  const base = { byAirport, memo: null, views: new Map(), pow: Object.fromEntries(POW_CLASSES.map((c) => [c, new Map()])) };
+  if (!memo) return base;
+  // Fingerprint of everything rivalsOn reads from rival state (markets with live
+  // adjustments are never cached). Results are reused while it is unchanged.
+  let stamp = '';
+  for (const id in state.rivals) {
+    const r = state.rivals[id];
+    stamp += `${id}:${r.status}:${r.fareIdx}:${r.capIdx}:${r.mergedInto ?? ''}:${r.fleet};`;
+  }
+  for (const r of state.newRivals ?? []) stamp += `${r.id}@${r.hubs.join(',')};`;
+  let cached = rivalsMemo.get(state);
+  if (!cached || cached.stamp !== stamp) rivalsMemo.set(state, (cached = { stamp, map: new Map() }));
+  return { ...base, memo: cached.map };
+}
+const rivalsMemo = new WeakMap();
+
 // Rivals currently competing on a pair, with the live market adjustments applied.
-export function rivalsOn(state, a, b) {
+export function rivalsOn(state, a, b, ctx) {
   const k = pairKey(a, b);
-  const adj = state.rivalMarkets[k] || {};
+  const adj = state.rivalMarkets[k];
+  if (ctx?.memo && !adj) {
+    let hit = ctx.memo.get(k);
+    if (!hit) ctx.memo.set(k, (hit = rivalsOnUncached(state, a, b, k, adj, ctx)));
+    return hit;
+  }
+  return rivalsOnUncached(state, a, b, k, adj, ctx ?? rivalsContext(state, { memo: false }));
+}
+
+function rivalsOnUncached(state, a, b, k, adj, ctx) {
   const out = [];
+  const seen = new Set();
   for (const s of staticRivals(a, b)) {
     let id = s.id;
     let rs = state.rivals[id];
@@ -215,20 +275,64 @@ export function rivalsOn(state, a, b) {
       id = rs.mergedInto;
       rs = state.rivals[id];
     }
-    const m = adj[id];
-    if (!rs || rs.status !== 'active' || m?.exited || out.some((x) => x.id === id)) continue;
-    out.push({ ...s, id, fare: rs.fareIdx * (m?.fare ?? 1), cap: rs.capIdx * (m?.cap ?? 1) });
+    const m = adj?.[id];
+    if (!rs || rs.status !== 'active' || m?.exited || seen.has(id)) continue;
+    seen.add(id);
+    out.push({ id, nonstop: s.nonstop, via: s.via, fare: rs.fareIdx * (m?.fare ?? 1), cap: rs.capIdx * (m?.cap ?? 1) });
   }
-  for (const r of state.newRivals ?? []) {
+  // Startups only fly nonstop from their bases.
+  for (const r of [...(ctx.byAirport.get(a) ?? []), ...(ctx.byAirport.get(b) ?? [])]) {
+    const m = adj?.[r.id];
+    if (seen.has(r.id) || m?.exited || !rivalFliesNonstop(r, a, b)) continue;
     const rs = state.rivals[r.id];
-    if (rs?.status !== 'active' || adj[r.id]?.exited || !rivalFliesNonstop(r, a, b)) continue;
-    out.push({ id: r.id, nonstop: true, fare: rs.fareIdx * (adj[r.id]?.fare ?? 1), cap: rs.capIdx * (adj[r.id]?.cap ?? 1) * Math.min(1, rs.fleet / 40 + 0.3) });
+    seen.add(r.id);
+    out.push({ id: r.id, nonstop: true, fare: rs.fareIdx * (m?.fare ?? 1), cap: rs.capIdx * (m?.cap ?? 1) * Math.min(1, rs.fleet / 40 + 0.3) });
   }
-  for (const [id, m] of Object.entries(adj)) {
-    if (!m.entered || out.some((x) => x.id === id) || state.rivals[id]?.status !== 'active') continue;
-    out.push({ id, nonstop: true, fare: state.rivals[id].fareIdx * (m.fare ?? 1), cap: state.rivals[id].capIdx * (m.cap ?? 1), entered: true });
+  if (adj) {
+    for (const id in adj) {
+      const m = adj[id];
+      if (!m.entered || seen.has(id) || state.rivals[id]?.status !== 'active') continue;
+      out.push({ id, nonstop: true, fare: state.rivals[id].fareIdx * (m.fare ?? 1), cap: state.rivals[id].capIdx * (m.cap ?? 1), entered: true });
+    }
   }
   return out;
+}
+
+// Fast path for the weekly simulation: the per-rival part of rivalAppeal is the
+// same on every market this week, so it is computed once per turn and the
+// price term (a power) is memoised by fare ratio. Gives identical results.
+const POW_CLASSES = ['F', 'J', 'W', 'Y', 'C'];
+function rivalView(state, ctx, id) {
+  let v = ctx.views.get(id);
+  if (v) return v;
+  const rival = rivalDef(state, id);
+  const type = RIVAL_TYPES[rival.type];
+  const partner = state.partners.codeshares.includes(rival.id) || (state.partners.alliance && rivalAlliance(state, rival) === state.partners.alliance) ? 0.5 : 1;
+  const rep = 0.5 + (state.rivals[rival.id].rep ?? 60) / 100;
+  v = { rival, type, cargo: rival.type === 'cargo', lcc: rival.type === 'lcc', premium: type.premium, k: partner * rep * type.quality * rival.quality, cw: rival.type === 'cargo' ? 1.3 : type.premium ? 0.5 : 0.15 };
+  ctx.views.set(id, v);
+  return v;
+}
+function powMemo(ctx, cls, ratio) {
+  const m = ctx.pow[cls];
+  let p = m.get(ratio);
+  if (p === undefined) m.set(ratio, (p = Math.max(0.05, ratio) ** -ELASTICITY[cls]));
+  return p;
+}
+export function rivalAppealFast(state, ctx, entry, cls, biz) {
+  const v = rivalView(state, ctx, entry.id);
+  const ratio = v.type.fare * entry.fare;
+  if (cls === 'C') {
+    const cliff = ratio > 1.2 ? Math.exp(-(ratio - 1.2) * 5) : 1; // priceEffect's ceiling at biz = 1
+    return v.cw * entry.cap * powMemo(ctx, 'C', ratio) * cliff * (entry.nonstop ? 1 : 0.6);
+  }
+  if (v.cargo) return 0;
+  if ((cls === 'J' || cls === 'F' || cls === 'W') && !v.premium) return cls === 'W' ? 0 : 0.05;
+  if (cls === 'F' && v.lcc) return 0;
+  const ceiling = 1.05 + 0.15 * biz + (cls === 'J' || cls === 'F' ? 0.1 : 0);
+  const r = Math.max(0.05, ratio);
+  const cliff = r > ceiling ? Math.exp(-(r - ceiling) * 5) : 1;
+  return v.k * Math.min(1.6, entry.cap) * powMemo(ctx, cls, ratio) * cliff * (entry.nonstop ? (v.premium ? 1.4 : 1.2) : 0.45);
 }
 
 // How attractive a rival's offer is for one cabin on this pair.
@@ -242,7 +346,7 @@ export function rivalAppeal(state, entry, cls, biz) {
   if (rival.type === 'cargo') return 0;
   if ((cls === 'J' || cls === 'F' || cls === 'W') && !type.premium) return cls === 'W' ? 0 : 0.05;
   if (cls === 'F' && rival.type === 'lcc') return 0;
-  const partner = state.partners.codeshares.includes(rival.id) || (state.partners.alliance && rival.alliance === state.partners.alliance) ? 0.5 : 1;
+  const partner = state.partners.codeshares.includes(rival.id) || (state.partners.alliance && rivalAlliance(state, rival) === state.partners.alliance) ? 0.5 : 1;
   const rep = 0.5 + (state.rivals[rival.id].rep ?? 60) / 100;
   return (
     partner *

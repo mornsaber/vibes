@@ -9,7 +9,8 @@ import { AIRCRAFT, aircraftById, inService } from '../data/aircraft.js';
 import { ROLES } from '../data/business.js';
 import { startAction, setDelegated, canDelegate, recognizeUnion, removeFrontline } from './staff.js';
 import { closeAirspace } from './safety.js';
-import { rivalDef } from './market.js';
+import { rivalDef, rivalAlliance } from './market.js';
+import { restructuringTerms, fileChapter11, CH11_WEEKS } from './restructuring.js';
 import { spawnStartup } from './rivals.js';
 import { AIRSPACE } from '../data/history.js';
 import { rivalById, RIVALS, ALLIANCES } from '../data/rivals.js';
@@ -460,7 +461,7 @@ export const EVENTS = [
       if (i !== 0) return 'You remain independent.';
       state.cash -= ALLIANCES[name].fee * 0.5;
       state.partners.alliance = name;
-      for (const r of RIVALS.filter((x) => x.alliance === name && state.rivals[x.id]?.status === 'active')) state.rivals[r.id].hostility = 0;
+      for (const r of RIVALS.filter((x) => rivalAlliance(state, x) === name && state.rivals[x.id]?.status === 'active')) state.rivals[r.id].hostility = 0;
       return `Welcome to ${name}.`;
     },
   },
@@ -828,6 +829,30 @@ EVENTS.push({
     state.board.confidence = clamp(state.board.confidence - 2, 0, 100);
     state.board.confidence = Math.max(state.board.confidence, 40);
     return 'Defences in place.';
+  },
+});
+
+EVENTS.push({
+  id: 'insolvency',
+  weight: 0,
+  build: (state) => {
+    const t = restructuringTerms(state);
+    return {
+      title: 'Insolvency: creditors are at the door',
+      text: `${state.airline.name} has been out of cash for eight weeks. You can seek Chapter 11 protection — debt payments freeze, a ${money(t.dip)} debtor-in-possession loan keeps you flying, and you get ${CH11_WEEKS} weeks to renegotiate leases and labour deals, shed routes and aircraft, and return to profit. Emerging wipes out the current shareholders. Or you can let the airline be liquidated.`,
+      choices: [
+        { label: 'File for Chapter 11', hint: 'Court protection and a DIP loan; reputation and morale take a hit', tone: 'good' },
+        { label: 'Liquidate', hint: 'Game over', tone: 'bad' },
+      ],
+    };
+  },
+  resolve(state, i) {
+    if (i === 0) {
+      const res = fileChapter11(state, { forced: true });
+      return res.ok ? 'The airline is now under court protection.' : res.error;
+    }
+    state.status = 'bankrupt';
+    return `${state.airline.name} has entered administration.`;
   },
 });
 

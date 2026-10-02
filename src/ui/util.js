@@ -31,8 +31,14 @@ export function bar(value, max = 100, { invert = false, label } = {}) {
   return `<div class="bar ${cls}" title="${esc(label ?? Math.round(p * 100) + '%')}"><span style="width:${(p * 100).toFixed(1)}%"></span></div>`;
 }
 
+// A label with an explanatory tooltip when the glossary knows it.
+export function tipLabel(label, html = esc(label)) {
+  const t = G.explain(label);
+  return t ? `<span class="tip" tabindex="0" data-tip="${esc(t)}">${html}</span>` : html;
+}
+
 export function kpi(label, value, { sub = '', href = '', cls = '' } = {}) {
-  const inner = `<label>${esc(label)}</label><div class="${cls}">${value}</div>${sub ? `<small>${sub}</small>` : ''}`;
+  const inner = `<label>${tipLabel(label)}</label><div class="${cls}">${value}</div>${sub ? `<small>${sub}</small>` : ''}`;
   return href ? `<a class="kpi link" href="${href}">${inner}</a>` : `<div class="kpi">${inner}</div>`;
 }
 
@@ -56,7 +62,7 @@ export function table(rows, columns, { empty = 'Nothing here yet.', rowAttr } = 
 
 export function statement(rows) {
   return `<table class="statement">${rows
-    .map(([label, value, cls = '']) => (label === '—' ? '<tr class="sep"><td colspan="2"></td></tr>' : `<tr class="${cls}"><td>${label}</td><td>${value}</td></tr>`))
+    .map(([label, value, cls = '']) => (label === '—' ? '<tr class="sep"><td colspan="2"></td></tr>' : `<tr class="${cls}"><td>${tipLabel(label, label)}</td><td>${value}</td></tr>`))
     .join('')}</table>`;
 }
 

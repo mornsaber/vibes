@@ -8,7 +8,8 @@ export function render(c) {
 }
 
 function rows(s) {
-  return [...G.RIVALS, ...s.newRivals].filter((r) => ['active', 'bankrupt', 'merged', 'acquired'].includes(s.rivals[r.id]?.status)).map((r) => ({ r, rs: s.rivals[r.id], overlap: s.rivals[r.id].status === 'active' ? G.overlapRoutes(s, r.id) : [] }));
+  const idx = G.overlapIndex(s);
+  return [...G.RIVALS, ...s.newRivals].filter((r) => ['active', 'bankrupt', 'merged', 'acquired'].includes(s.rivals[r.id]?.status)).map((r) => ({ r, rs: s.rivals[r.id], overlap: s.rivals[r.id].status === 'active' ? idx.get(r.id) ?? [] : [] }));
 }
 
 function list(c) {

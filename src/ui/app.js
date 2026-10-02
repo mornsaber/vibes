@@ -1,7 +1,7 @@
 // Application shell: hash router, sidebar navigation, top bar with time
 // controls, decision modal, persistence and the global action dispatcher.
 
-import { G, esc, money, pct, int, liverySvg } from './util.js';
+import { G, esc, money, pct, int, liverySvg, tipLabel } from './util.js';
 import * as dashboard from './pages/dashboard.js';
 import * as routes from './pages/routes.js';
 import * as planning from './pages/planning.js';
@@ -18,8 +18,8 @@ import * as charter from './pages/charter.js';
 import * as special from './pages/special.js';
 import * as start from './pages/start.js';
 import * as history from './pages/history.js';
+import { createSaves } from './storage.js';
 
-const SAVE_KEY = 'airline-exec-sim/save-v3';
 
 export const NAV = [
   { section: 'Operations', items: [
@@ -48,29 +48,86 @@ const app = document.getElementById('app');
 const modalRoot = document.getElementById('modal-root');
 const toastEl = document.getElementById('toast');
 
-export const ctx = { game: loadGame(), ui: { navOpen: false } };
+export const ctx = { game: null, slot: null, snapshot: null, ui: { navOpen: false } };
 
 // ---------------------------------------------------------------------------
-// Persistence
+// Persistence: named save slots (gzip in localStorage) with a one-step undo.
 
-function loadGame() {
-  try {
-    const raw = localStorage.getItem(SAVE_KEY);
-    return raw ? G.migrate(JSON.parse(raw)) : null;
-  } catch {
-    return null;
-  }
-}
+// localStorage can be missing or throw (private mode); reads fail soft.
+const store = {
+  getItem: (k) => {
+    try {
+      return localStorage.getItem(k);
+    } catch {
+      return null;
+    }
+  },
+  setItem: (k, v) => localStorage.setItem(k, v),
+  removeItem: (k) => {
+    try {
+      localStorage.removeItem(k);
+    } catch {
+      // ignore
+    }
+  },
+};
+export const saves = createSaves(store, { migrate: G.migrate });
+
+let saving = Promise.resolve();
+// Serialise now (so later mutations don't leak in), compress and write in the background.
 export function saveGame() {
-  try {
-    if (ctx.game) localStorage.setItem(SAVE_KEY, JSON.stringify(ctx.game));
-    else localStorage.removeItem(SAVE_KEY);
-  } catch {
-    // Storage unavailable (private mode or full) — play continues unsaved.
-  }
+  const game = ctx.game;
+  if (!game) return saving;
+  const snapshot = JSON.parse(JSON.stringify(game));
+  // The slot is fixed now, so a later slot switch can't redirect this write.
+  if (!ctx.slot) ctx.slot = saves.newId();
+  const id = ctx.slot;
+  saving = saving.then(async () => {
+    const res = await saves.save(snapshot, { id });
+    if (!res.ok) toast(res.error);
+    else if (ctx.slot === id) saves.setActive(id);
+  });
+  return saving;
 }
-export const hasSave = () => !!loadGame();
-export const savedGame = loadGame;
+
+// Open a slot as the current game.
+export async function openSlot(id) {
+  const g = await saves.load(id);
+  if (!g) return { ok: false, error: 'That save could not be read' };
+  ctx.game = g;
+  ctx.slot = id;
+  ctx.snapshot = saves.hasSnapshot(id) ? { week: null } : null;
+  ctx.ui = { navOpen: false };
+  saves.setActive(id);
+  return { ok: true };
+}
+
+// Remember the game before an advance so it can be reverted.
+function takeSnapshot() {
+  if (!ctx.game) return;
+  const json = JSON.stringify(ctx.game);
+  ctx.snapshot = { json, week: ctx.game.week };
+  const slot = ctx.slot;
+  if (slot) saving = saving.then(() => saves.snapshot(slot, JSON.parse(json)));
+}
+
+async function revert() {
+  let g = ctx.snapshot?.json ? G.migrate(JSON.parse(ctx.snapshot.json)) : null;
+  if (!g && ctx.slot) g = await saves.loadSnapshot(ctx.slot);
+  if (!g) return { ok: false, error: 'Nothing to revert to' };
+  ctx.game = g;
+  ctx.snapshot = null;
+  if (ctx.slot) saves.clearSnapshot(ctx.slot);
+  ctx.ui.dismissedEnd = false;
+  return { ok: true, message: `Reverted to ${G.dateLabel(g.week)}.` };
+}
+
+async function boot() {
+  const adopted = await saves.adoptLegacy();
+  const id = saves.activeId() ?? adopted;
+  if (id && saves.list().some((x) => x.id === id)) await openSlot(id);
+  render();
+}
 
 // ---------------------------------------------------------------------------
 // Feedback
@@ -119,6 +176,7 @@ export function render() {
         ${renderTopbar(g)}
         <main id="page">${body}</main>
       </div>
+      ${tutorialCard(g)}
     </div>`;
   modalRoot.innerHTML = renderModal(g);
   mod.after?.({ ...ctx, state: g, params });
@@ -126,6 +184,25 @@ export function render() {
   else window.scrollTo(0, 0);
   lastHash = location.hash;
   document.title = `${g.airline.name} · ${G.dateLabel(g.week)}`;
+}
+
+// Floating step tracker for the guided first year.
+function tutorialCard(g) {
+  const step = G.tutorialCurrent(g);
+  if (!step) return '';
+  const steps = G.tutorialSteps(g);
+  const done = steps.filter((x) => x.complete).length;
+  const n = steps.indexOf(steps.find((x) => x.id === step.id)) + 1;
+  return `<aside class="tutorial" aria-label="Tutorial">
+    <div class="tut-head"><small class="muted">First year · step ${n} of ${steps.length} · ${done} done</small><button class="icon-btn" data-action="tut-hide" title="Hide the tutorial" aria-label="Hide tutorial">✕</button></div>
+    <div class="tut-bar"><span style="width:${((done / steps.length) * 100).toFixed(0)}%"></span></div>
+    <h3>${esc(step.title)}</h3>
+    <p>${esc(step.text)}</p>
+    <div class="row wrap">${step.href && location.hash !== step.href ? `<a class="button-like small" href="${step.href}">Take me there</a>` : ''}
+      ${step.ack ? `<button class="small primary" data-action="tut-ack" data-id="${step.id}">Got it</button>` : '<small class="muted">Ticks off automatically when done.</small>'}
+      <button class="small ghost" data-action="tut-list">${ctx.ui.tutList ? 'Hide steps' : 'All steps'}</button></div>
+    ${ctx.ui.tutList ? `<ol class="tut-steps">${steps.map((x) => `<li class="${x.complete ? 'done' : x.id === step.id ? 'now' : ''}"><a href="${x.href}">${esc(x.title)}</a></li>`).join('')}</ol>` : ''}
+  </aside>`;
 }
 
 function renderSidebar(active) {
@@ -159,31 +236,53 @@ function renderTopbar(g) {
     <button class="icon-btn nav-toggle" data-action="toggle-nav" aria-label="Menu">☰</button>
     <div class="date"><b>${G.dateLabel(g.week)}</b><small>${esc(G.eraOf(G.yearOf(g.week)).name)} · ${G.quarterLabel(G.quarterKey(g.week))}</small></div>
     <div class="stats">
-      <a class="stat" href="#finances"><label>Cash</label><b class="${g.cash < 0 ? 'bad' : ''}">${money(g.cash)}</b></a>
-      <a class="stat" href="#finances"><label>Profit/wk</label><b class="${(r?.profit ?? 0) < 0 ? 'bad' : 'good'}">${money(r?.profit ?? 0)}</b></a>
-      <a class="stat" href="#routes"><label>Load</label><b>${r ? pct(r.lf) : '–'}</b></a>
+      <a class="stat" href="#finances"><label>${tipLabel('Cash')}</label><b class="${g.cash < 0 ? 'bad' : ''}">${money(g.cash)}</b></a>
+      <a class="stat" href="#finances"><label>${tipLabel('Profit/wk')}</label><b class="${(r?.profit ?? 0) < 0 ? 'bad' : 'good'}">${money(r?.profit ?? 0)}</b></a>
+      <a class="stat" href="#routes"><label>${tipLabel('Load')}</label><b>${r ? pct(r.lf) : '–'}</b></a>
       <a class="stat" href="#fleet"><label>Fleet</label><b>${g.fleet.length}</b></a>
-      <a class="stat hide-sm" href="#finances"><label>Rating</label><b>${g.finance.rating}</b></a>
-      <a class="stat hide-sm" href="#management/airline"><label>Board</label><b class="${g.board.confidence < 25 ? 'bad' : ''}">${Math.round(g.board.confidence)}</b></a>
+      <a class="stat hide-sm" href="#finances"><label>${tipLabel('Rating')}</label><b>${g.finance.rating}</b></a>
+      <a class="stat hide-sm" href="#management/airline"><label>${tipLabel('Board')}</label><b class="${g.board.confidence < 25 ? 'bad' : ''}">${Math.round(g.board.confidence)}</b></a>
     </div>
     <div class="time">
+      ${ctx.snapshot ? `<button class="ghost" data-action="revert" title="Revert to before the last time advance">↶</button>` : ''}
       ${g.advanceRemaining > 0 && !g.pendingEvent && playing ? `<button class="primary" data-action="advance" data-unit="continue">Continue ${g.advanceRemaining} wk ▶</button>` : ''}
       ${units.map((u, i) => `<button class="${i === 0 ? 'primary' : ''}" data-action="advance" data-unit="${u}" ${blocked ? 'disabled' : ''} title="Advance one ${u}">${u[0].toUpperCase() + u.slice(1)} ${'▶'.repeat(i ? 2 : 1)}</button>`).join('')}
     </div>
   </header>`;
 }
 
+export function slotTable(slots, { inGame = true } = {}) {
+  if (!slots.length) return '<p class="muted small">No saved games yet.</p>';
+  return `<table class="slots"><tbody>${slots.map((x) => `<tr class="${x.id === ctx.slot ? 'current' : ''}">
+    <td><span class="dot" style="background:${esc(x.color ?? '#888')}"></span></td>
+    <td><b>${esc(x.name)}</b><br><small class="muted">${esc(x.airline ?? '')}${x.scenario ? ` · ${esc(x.scenario)}` : ''} · ${G.dateLabel(x.week)}${x.status && x.status !== 'playing' ? ` · ${esc(x.status)}` : ''}</small></td>
+    <td class="num"><small class="muted">${new Date(x.savedAt).toLocaleString()}<br>${Math.round((x.size ?? 0) / 1024)} KB</small></td>
+    <td class="num">${x.id === ctx.slot && inGame ? '<small class="muted">playing</small>' : `<button class="small primary" data-action="slot-load" data-id="${x.id}">Load</button>`}
+      <button class="small" data-action="slot-copy" data-id="${x.id}" title="Duplicate">⧉</button>
+      ${x.id === ctx.slot && inGame ? '' : `<button class="small danger" data-action="slot-delete" data-id="${x.id}" title="Delete">✕</button>`}</td>
+  </tr>`).join('')}</tbody></table>`;
+}
+
 function renderModal(g) {
   if (ctx.ui.menu) {
-    return `<div class="modal-backdrop"><div class="modal">
+    const slots = saves.list();
+    const current = slots.find((x) => x.id === ctx.slot);
+    return `<div class="modal-backdrop"><div class="modal wide">
       <h2>Game menu</h2>
-      <p class="muted">${esc(g.airline.name)} autosaves in this browser after every action.</p>
+      <p class="muted">${esc(g.airline.name)} autosaves to its slot after every action.</p>
+      ${current ? `<div class="row" data-form><input name="slotname" value="${esc(current.name)}" maxlength="40"><button class="small" data-action="slot-rename" data-id="${current.id}">Rename slot</button></div>` : ''}
       <div class="choices">
         <button data-action="close-menu">Back to the game</button>
+        ${ctx.snapshot ? `<button data-action="revert">↶ Revert to before the last time advance${ctx.snapshot.week ? ` (${G.dateLabel(ctx.snapshot.week)})` : ''}</button>` : ''}
+        ${G.tutorialCurrent(g) ? '' : '<button data-action="tut-show">Show the first-year tutorial</button>'}
+        <button data-action="slot-new">Save as a new slot</button>
         <button data-action="export-save">Download save file</button>
-        <label class="button-like">Load save file<input type="file" accept=".json" data-change="import-save" hidden></label>
-        <button class="danger" data-action="abandon">Abandon airline and start over</button>
+        <label class="button-like">Import save file<input type="file" accept=".json" data-change="import-save" hidden></label>
+        <button data-action="close-game">Close game (back to the title screen)</button>
+        <button class="danger" data-action="abandon">Abandon airline (delete its slot)</button>
       </div>
+      <h3>Saved games</h3>
+      ${slotTable(slots)}
     </div></div>`;
   }
   if (['won', 'lost'].includes(g.status) && !ctx.ui.dismissedEnd) {
@@ -232,6 +331,7 @@ export function formValues(el) {
 
 const GLOBAL_ACTIONS = {
   advance(el) {
+    if (el.dataset.unit !== 'continue') takeSnapshot();
     const res = G.advance(ctx.game, el.dataset.unit);
     if (res.ok && ctx.game.pendingEvent) return res;
     if (res.ok && res.ran > 1 && !ctx.game.pendingEvent) toast(`Advanced ${res.ran} weeks.`, 'info');
@@ -249,11 +349,42 @@ const GLOBAL_ACTIONS = {
   menu: () => (ctx.ui.menu = true),
   'close-menu': () => (ctx.ui.menu = false),
   'dismiss-end': () => (ctx.ui.dismissedEnd = true),
+  'tut-ack': (el) => G.tutorialAck(ctx.game, el.dataset.id),
+  'tut-hide': () => G.setTutorial(ctx.game, false),
+  'tut-show': () => ((ctx.ui.menu = false), G.setTutorial(ctx.game, true)),
+  'tut-list': () => (ctx.ui.tutList = !ctx.ui.tutList),
+  revert: () => (confirm(`Revert to the game as it was before your last time advance${ctx.snapshot?.week ? ` (${G.dateLabel(ctx.snapshot.week)})` : ''}?`) ? revert() : null),
+  'slot-load': (el) => openSlot(el.dataset.id).then((r) => (r.ok && (location.hash = '#dashboard'), r)),
+  'slot-delete': (el) => (confirm('Delete this saved game for good?') ? (saves.remove(el.dataset.id), el.dataset.id === ctx.slot && (ctx.slot = null), { ok: true, message: 'Save deleted.' }) : null),
+  'slot-copy': (el) => saveGame().then(() => saves.duplicate(el.dataset.id)).then((r) => (r.ok ? { ok: true, message: 'Copied to a new slot.' } : r)),
+  'slot-rename'(el) {
+    const v = formValues(el);
+    return saves.rename(el.dataset.id, v.slotname);
+  },
+  'slot-new'() {
+    // "Save as": the current game continues in a new slot.
+    ctx.slot = null;
+    ctx.snapshot = null;
+    return saveGame().then(() => ({ ok: true, message: 'Saved to a new slot — you are now playing in it.' }));
+  },
+  'close-game'() {
+    return saveGame().then(() => {
+      ctx.game = null;
+      ctx.slot = null;
+      ctx.snapshot = null;
+      saves.setActive(null);
+      ctx.ui = { navOpen: false };
+      location.hash = '';
+    });
+  },
   'free-play': () => G.continueFreePlay(ctx.game),
   abandon() {
-    if (!confirm('Abandon this airline? Your save will be deleted.')) return;
+    if (!confirm('Abandon this airline? Its save slot will be deleted.')) return;
+    if (ctx.slot) saves.remove(ctx.slot);
     ctx.ui = { navOpen: false };
     ctx.game = null;
+    ctx.slot = null;
+    ctx.snapshot = null;
     location.hash = '';
   },
   'export-save'() {
@@ -271,13 +402,11 @@ const GLOBAL_CHANGES = {
     const file = el.files?.[0];
     if (!file) return;
     try {
-      const g = G.migrate(JSON.parse(await file.text()));
-      if (!g) throw new Error('Not a compatible save file');
-      ctx.game = g;
-      ctx.ui = { navOpen: false };
-      saveGame();
+      const res = await saves.importText(await file.text(), file.name.replace(/\.json$/i, ''));
+      if (!res.ok) throw new Error(res.error);
+      await openSlot(res.id);
       render();
-      toast('Save loaded.', 'info');
+      toast('Save imported into a new slot.', 'info');
     } catch (err) {
       toast(`Could not load: ${err.message}`);
     }
@@ -297,8 +426,10 @@ function after(result) {
   if (result?.ok === false) toast(result.error);
   else if (result?.message && result.ok) toast(result.message, 'info');
   if (result?.skipRender) return;
+  if (ctx.game) G.scheduleChanged(ctx.game);
   saveGame();
   render();
+  return result;
 }
 
 function run(handler, el) {
@@ -350,4 +481,4 @@ window.addEventListener('hashchange', () => {
   render();
 });
 
-render();
+boot();

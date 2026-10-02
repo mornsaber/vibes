@@ -21,6 +21,57 @@ export const seasonOf = (week) => {
   const m = dateOf(week).getUTCMonth();
   return m >= 3 && m <= 9 ? 'summer' : 'winter';
 };
+// ---------------------------------------------------------------------------
+// Derived-data caches (never saved). Route lookups are rebuilt whenever the
+// routes array changes; per-route frequencies whenever any schedule changes.
+// All schedule edits go through setSchedule()/applyEntry(), which invalidate.
+
+const caches = new WeakMap();
+const cacheOf = (state) => {
+  let c = caches.get(state);
+  if (!c) caches.set(state, (c = {}));
+  return c;
+};
+export function scheduleChanged(state) {
+  const c = caches.get(state);
+  if (c) c.freq = null;
+}
+// Identity changes whenever schedules change: a cheap memo key for derived views.
+export const scheduleVersion = (state) => freqIndex(state);
+export function setSchedule(state, ac, list) {
+  ac.schedule = list;
+  scheduleChanged(state);
+}
+function routeMap(state) {
+  const c = cacheOf(state);
+  if (c.routes !== state.routes || c.routeLen !== state.routes.length) {
+    c.routes = state.routes;
+    c.routeLen = state.routes.length;
+    c.routeMap = new Map(state.routes.map((r) => [r.id, r]));
+  }
+  return c.routeMap;
+}
+function freqIndex(state) {
+  const c = cacheOf(state);
+  if (!c.freq || c.fleet !== state.fleet || c.fleetLen !== state.fleet.length) {
+    const idx = new Map();
+    for (const ac of state.fleet) {
+      for (const e of ac.schedule) {
+        let f = idx.get(e.routeId);
+        if (!f) idx.set(e.routeId, (f = { summer: 0, winter: 0 }));
+        if (!e.season || e.season === 'all') {
+          f.summer += e.freq;
+          f.winter += e.freq;
+        } else f[e.season] += e.freq;
+      }
+    }
+    c.freq = idx;
+    c.fleet = state.fleet;
+    c.fleetLen = state.fleet.length;
+  }
+  return c.freq;
+}
+
 export const inSeason = (entry, season) => !entry.season || entry.season === 'all' || entry.season === season;
 export const activeSchedule = (state, ac, season = seasonOf(state.week)) => ac.schedule.filter((e) => inSeason(e, season));
 export const isSeasonal = (ac) => ac.schedule.some((e) => e.season && e.season !== 'all');
@@ -29,7 +80,7 @@ export const isSeasonal = (ac) => ac.schedule.some((e) => e.season && e.season !
 export function bankPenalty(state, ac) {
   let worst = 0;
   for (const e of ac.schedule) {
-    const r = state.routes.find((x) => x.id === e.routeId);
+    const r = routeMap(state).get(e.routeId);
     if (!r) continue;
     for (const h of state.hubs) if (h.banks && (h.code === r.a || h.code === r.b)) worst = Math.max(worst, 0.06 * h.discipline);
   }
@@ -41,7 +92,7 @@ export function availableHours(state, ac) {
 }
 
 const entryHours = (state, ac, e) => {
-  const r = state.routes.find((x) => x.id === e.routeId);
+  const r = routeMap(state).get(e.routeId);
   return r ? e.freq * roundTripHours(typeOf(ac), r.distance) : 0;
 };
 // Hours in one season, or (no season) the busier of the two — the binding constraint.
@@ -55,8 +106,8 @@ export function utilization(state, ac, season = seasonOf(state.week)) {
   return (scheduledHours(state, ac, season) + (ac.contractHours || 0)) / total;
 }
 
-export const routeById = (state, id) => state.routes.find((r) => r.id === id);
-export const routeFreq = (state, route, season = seasonOf(state.week)) => sum(state.fleet, (ac) => sum(activeSchedule(state, ac, season).filter((s) => s.routeId === route.id), (s) => s.freq));
+export const routeById = (state, id) => routeMap(state).get(id);
+export const routeFreq = (state, route, season = seasonOf(state.week)) => freqIndex(state).get(route.id)?.[season] ?? 0;
 export const peakFreq = (state, route) => Math.max(routeFreq(state, route, 'summer'), routeFreq(state, route, 'winter'));
 export const routeAircraft = (state, route) => state.fleet.filter((ac) => ac.schedule.some((s) => s.routeId === route.id));
 
@@ -113,7 +164,8 @@ export function openRoute(state, a, b) {
 export function closeRoute(state, routeId) {
   const route = routeById(state, routeId);
   if (!route) return fail('No such route');
-  for (const ac of state.fleet) ac.schedule = ac.schedule.filter((s) => s.routeId !== routeId);
+  for (const ac of state.fleet) if (ac.schedule.some((s) => s.routeId === routeId)) ac.schedule = ac.schedule.filter((s) => s.routeId !== routeId);
+  scheduleChanged(state);
   state.routes = state.routes.filter((r) => r !== route);
   log(state, `Closed ${route.a}–${route.b}.`, 'bad', 'network');
   return ok();
@@ -233,7 +285,8 @@ export function entryFreq(ac, routeId, season = 'all') {
   return list.find((e) => inSeason(e, season))?.freq ?? 0;
 }
 
-function applyEntry(ac, routeId, freq, season) {
+function applyEntry(state, ac, routeId, freq, season) {
+  scheduleChanged(state);
   const mine = ac.schedule.filter((e) => e.routeId === routeId);
   ac.schedule = ac.schedule.filter((e) => e.routeId !== routeId);
   if (season === 'all') {
@@ -257,7 +310,7 @@ export function setFrequency(state, acId, routeId, freq, { autoSlots = true, sea
   if (!['all', 'summer', 'winter'].includes(season)) return fail('Unknown season');
   freq = Math.max(0, Math.round(Number(freq) || 0));
   if (freq === 0) {
-    applyEntry(ac, routeId, 0, season);
+    applyEntry(state, ac, routeId, 0, season);
     return ok();
   }
   const can = canOperate(state, ac, route);
@@ -266,10 +319,10 @@ export function setFrequency(state, acId, routeId, freq, { autoSlots = true, sea
   if (freq > max) return fail(`${ac.reg} only has time for ${max} round trips a week on this route`);
   const before = ac.schedule.map((e) => ({ ...e }));
   const peakBefore = peakFreq(state, route);
-  applyEntry(ac, routeId, freq, season);
+  applyEntry(state, ac, routeId, freq, season);
   const delta = peakFreq(state, route) - peakBefore;
   const undo = (res) => {
-    ac.schedule = before;
+    setSchedule(state, ac, before);
     return res;
   };
   if (delta > 0) {
@@ -290,6 +343,15 @@ export function setFrequency(state, acId, routeId, freq, { autoSlots = true, sea
   return ok();
 }
 
+// Turn a year-round entry into identical summer and winter entries to edit separately.
+export function splitSeasons(state, acId, routeId) {
+  const ac = state.fleet.find((a) => a.id === acId);
+  const e = ac?.schedule.find((x) => x.routeId === routeId && (!x.season || x.season === 'all'));
+  if (!e) return fail('Nothing to split');
+  setSchedule(state, ac, [...ac.schedule.filter((x) => x !== e), { routeId, freq: e.freq, season: 'summer' }, { routeId, freq: e.freq, season: 'winter' }]);
+  return ok();
+}
+
 export function assignAircraft(state, acId, routeId) {
   const ac = state.fleet.find((a) => a.id === acId);
   const route = routeById(state, routeId);
@@ -304,7 +366,7 @@ export function assignAircraft(state, acId, routeId) {
 export function clearSchedule(state, acId) {
   const ac = state.fleet.find((a) => a.id === acId);
   if (!ac) return fail('No such aircraft');
-  ac.schedule = [];
+  setSchedule(state, ac, []);
   return ok();
 }
 

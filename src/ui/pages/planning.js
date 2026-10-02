@@ -95,7 +95,12 @@ function capacity(c) {
     { h: 'Utilisation', v: (ac) => `${bar(G.utilization(s, ac), 1)} <small>${int(G.scheduledHours(s, ac) + (ac.contractHours || 0))}/${G.weeklyHours(G.typeOf(ac))} h</small>` },
     { h: 'Routes', v: (ac) => ac.schedule.map((x) => { const r = G.routeById(s, x.routeId); return r ? `<a href="#routes/${r.id}">${r.a}–${r.b}</a>×${x.freq}${x.season ? `<small class="muted"> ${x.season[0].toUpperCase()}</small>` : ''}` : ''; }).join(', ') || (ac.contractHours ? 'Contract' : '<span class="muted">—</span>') },
     { h: 'Assign to', v: (ac) => {
-      const opts = s.routes.filter((r) => G.canOperate(s, ac, r).ok && G.maxFrequency(s, ac, r) > 0);
+      const spare = G.availableHours(s, ac) - G.scheduledHours(s, ac);
+      const t = G.typeOf(ac);
+      // Only the ten routes that need seats most, to keep big fleets snappy.
+      const opts = spare < 4 ? [] : s.routes.filter((r) => spare >= G.roundTripHours(t, r.distance) && G.canOperate(s, ac, r).ok)
+        .sort((a, b) => (G.routeFreq(s, a) ? G.spill(a) / Math.max(1, a.last?.seatTotal ?? 1) : 99) < (G.routeFreq(s, b) ? G.spill(b) / Math.max(1, b.last?.seatTotal ?? 1) : 99) ? 1 : -1)
+        .slice(0, 10);
       return opts.length ? `<div class="row" data-form><select name="route">${options(opts.map((r) => [r.id, `${r.a}–${r.b} (≤${G.maxFrequency(s, ac, r)})`]), '')}</select><button class="small" data-action="quick-assign" data-ac="${ac.id}">Add</button></div>` : '<span class="muted small">No hours / routes</span>';
     } },
   ]))}`;

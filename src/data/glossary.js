@@ -1,0 +1,53 @@
+// Plain-language explanations of key metrics, keyed by the label shown in the
+// UI (case-insensitive). KPIs, statement rows and top-bar stats pick these up
+// automatically as tooltips.
+
+export const GLOSSARY = {
+  cash: 'Money in the bank. Eight weeks below zero and creditors force administration (or Chapter 11, if allowed).',
+  'profit / week': 'Last week’s net result after every cost, including interest, depreciation and (quarterly) tax.',
+  'profit/wk': 'Last week’s net result after every cost, including interest, depreciation and (quarterly) tax.',
+  'net / week': 'Last week’s net result after every cost, including interest, depreciation and (quarterly) tax.',
+  load: 'Load factor: the share of seats flown that carried a paying passenger. Around 80–85% is healthy; above 95% you’re turning people away.',
+  'load factor': 'Load factor: the share of seats flown that carried a paying passenger. Around 80–85% is healthy; above 95% you’re turning people away.',
+  'load factor (rpk/ask)': 'Passenger-km flown divided by seat-km offered — load factor weighted by distance.',
+  fleet: 'Aircraft you operate or have arriving (leases, used purchases). Factory orders are listed separately.',
+  rating: 'Credit rating from leverage, liquidity and interest cover. It sets your borrowing costs and how much banks will lend.',
+  'credit rating': 'Credit rating from leverage, liquidity and interest cover. It sets your borrowing costs and how much banks will lend.',
+  board: 'Board confidence (0–100). Quarterly reviews and year-end objectives move it; at zero you are fired.',
+  'on-time': 'On-time performance: the share of flights within 15 minutes of schedule. Driven by reliability, staffing, congestion and hub banks.',
+  'market share': 'Your share of all travellers in this market (economy cabin), against rivals and people who don’t fly.',
+  share: 'Your share of all travellers in this market (economy cabin), against rivals and people who don’t fly.',
+  'passengers / wk': 'Passengers carried last week, counting each direction once.',
+  'pax / wk': 'Passengers carried last week, counting each direction once.',
+  'connecting': 'Passengers changing planes at your hub — the payoff of a hub-and-spoke network.',
+  'connecting pax': 'Passengers changing planes at your hub — the payoff of a hub-and-spoke network.',
+  utilisation: 'Block hours flown per week as a share of what the aircraft could fly. Idle aircraft still cost lease rent or capital.',
+  'average utilisation': 'Block hours flown per week as a share of what the aircraft could fly. Idle aircraft still cost lease rent or capital.',
+  ask: 'Available seat-kilometres: seats flown × distance. The standard measure of airline capacity.',
+  'ask / wk': 'Available seat-kilometres: seats flown × distance. The standard measure of airline capacity.',
+  rpk: 'Revenue passenger-kilometres: passengers × distance flown. The standard measure of traffic.',
+  'rpk / wk': 'Revenue passenger-kilometres: passengers × distance flown. The standard measure of traffic.',
+  rask: 'Revenue per available seat-km. Compare with CASK: if RASK is below CASK, you lose money on every seat you fly.',
+  cask: 'Cost per available seat-km. Long flights and big aircraft have lower CASK; regional flying is expensive per seat.',
+  'cask ex-fuel': 'Cost per seat-km excluding fuel — the part of your costs you control most directly.',
+  'passenger yield': 'Ticket revenue per passenger-km. High on short or premium-heavy routes, low on long leisure routes.',
+  yield: 'Ticket revenue per passenger-km. High on short or premium-heavy routes, low on long leisure routes.',
+  contribution: 'Route revenue minus its direct costs (fuel, maintenance, airport, service, sales). Positive contribution helps pay for crew and aircraft.',
+  'route profit': 'Contribution minus this route’s share of crew salaries and aircraft ownership costs.',
+  'ebitda (annualised)': 'Earnings before interest, tax, depreciation and amortisation, annualised from the last quarter. Lenders base limits on it.',
+  'lease-adjusted net leverage': 'Debt plus five years of lease rent, less cash, divided by EBITDAR. Above ~5× lenders get nervous.',
+  liquidity: 'How many weeks of cash costs your cash could cover.',
+  'interest coverage': 'EBITDA divided by interest. Below 1.5× you struggle to service debt.',
+  'share price': 'Market value of the company per share, from earnings, assets, brand and debt.',
+  inflation: 'Prices rise over time. Money is shown in the dollars of the day; loans and leases shrink in real terms, cash too.',
+  reputation: 'How travellers rate you (0–100): service, punctuality, product, staff morale and marketing. It lifts demand on every route.',
+  'home-market share': 'Your weekly passengers against the biggest airlines based in your home market (theirs estimated from fleets).',
+  spill: 'Travellers who wanted a seat but didn’t get one — a sign you could add capacity or raise fares.',
+  'employees': 'Staff on the payroll. Contractors are extra and don’t count toward unions.',
+  'wage level': 'Your region’s pay level relative to the US market.',
+  destinations: 'Airports you serve, including hubs.',
+  'weekly payroll': 'Total pay for employees and contractors per week.',
+};
+
+const norm = (s) => String(s ?? '').replace(/<[^>]*>/g, '').trim().toLowerCase();
+export const explain = (label) => GLOSSARY[norm(label)] ?? null;

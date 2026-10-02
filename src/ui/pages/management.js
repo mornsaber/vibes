@@ -222,8 +222,9 @@ function service(c) {
 function codeshare(c) {
   const s = c.state;
   const partners = s.partners.codeshares.map((id) => G.rivalById[id]);
+  const idx = G.overlapIndex(s);
   const prospects = G.RIVALS.filter((r) => r.type !== 'cargo' && !s.partners.codeshares.includes(r.id) && s.rivals[r.id].status === 'active')
-    .map((r) => ({ r, t: G.codeshareTerms(s, r.id), overlap: G.overlapRoutes(s, r.id).length, feeds: s.routes.filter((x) => r.hubs.includes(x.a) || r.hubs.includes(x.b)).length }))
+    .map((r) => ({ r, t: G.codeshareTerms(s, r.id), overlap: (idx.get(r.id) ?? []).length, feeds: s.routes.filter((x) => r.hubs.includes(x.a) || r.hubs.includes(x.b)).length }))
     .sort((a, b) => b.feeds - a.feeds || b.t.score - a.t.score)
     .slice(0, 25);
   return `${panel('Codeshare partners', table(partners, [

@@ -9,6 +9,7 @@ export function issues(s) {
   const out = [];
   const add = (level, text, href) => out.push({ level, text, href });
   const r = s.lastReport;
+  if (G.inChapter11(s)) add('bad', `In Chapter 11: ${s.restructuring.deadlineWeek - s.week} weeks to return to profit and emerge.`, '#finances');
   if (s.cash < 0) add('bad', `Cash is negative (${money(s.cash)}). ${8 - s.lowCashWeeks} weeks until administration.`, '#finances');
   else if (r && s.cash < Math.abs(Math.min(0, r.profit)) * 8) add('bad', `Cash runway under 8 weeks at the current burn.`, '#finances');
   for (const [role, a] of Object.entries(s.strikes)) add('bad', `${G.ROLES[role].name}: ${G.ACTIONS[a.kind].name.toLowerCase()} (${a.weeks} week(s) left).`, `#management/staffing/${role}`);

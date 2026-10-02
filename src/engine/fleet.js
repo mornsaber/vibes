@@ -3,6 +3,7 @@
 
 import { AIRCRAFT, aircraftById, cabinUnits, seatCount, CLASSES, CHECKS, UPGRADES, CONVERSIONS, inProduction, inService, SEAT_PRODUCTS, seatProducts, defaultCabin, canCombi, cabinGroup } from '../data/aircraft.js';
 import { clamp, fail, ok, rand, randInt, pick, weightedPick, newId, log, money, sum, yearOf, weekOfYearStart } from './core.js';
+import { setSchedule } from './network.js';
 
 export const typeOf = (ac) => aircraftById[ac.type];
 export const ageYears = (state, ac) => Math.max(0, (state.week - ac.builtWeek) / 52);
@@ -109,6 +110,7 @@ export const weeklyFromMonthly = (m) => (m * 12) / 52;
 // Factory orders
 
 export function orderAircraft(state, typeId, qty = 1, config, cabin) {
+  if (state.restructuring?.status === 'active') return fail('Not allowed while in Chapter 11: new aircraft orders need the court’s approval');
   const type = aircraftById[typeId];
   if (!type) return fail('Unknown aircraft type');
   const year = yearOf(state.week);
@@ -407,7 +409,7 @@ export function startConversion(state, acId) {
   if (state.cash < conv.cost) return fail(`Conversion costs ${money(conv.cost)}`);
   state.cash -= conv.cost;
   state.ledgerCapex.retrofits += conv.cost;
-  ac.schedule = [];
+  setSchedule(state, ac, []);
   addWork(state, ac, Math.ceil(conv.days / 7), 'Freighter conversion', { convertTo: conv.to });
   log(state, `${ac.reg} is being converted to a ${aircraftById[conv.to].name} (${money(conv.cost)}).`, 'info', 'engineering');
   return ok();

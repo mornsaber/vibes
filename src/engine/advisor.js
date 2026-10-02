@@ -8,7 +8,7 @@ import { fareNow, DEFAULT_RM } from './market.js';
 import { brandOf, brandKind } from './brands.js';
 import { typeOf, isDelivered, isFreighter } from './fleet.js';
 import {
-  canOperate, maxFrequency, setFrequency, routeFreq, routeById, entryFreq, closeRoute, scheduledHours, availableHours, seasonOf,
+  canOperate, maxFrequency, setFrequency, routeFreq, routeById, entryFreq, closeRoute, scheduledHours, availableHours, seasonOf, setSchedule, roundTripHours, scheduleVersion,
 } from './network.js';
 
 export const defaultAutopilot = () => ({ pricing: true, rm: true, fleet: true, targetLF: 0.84 });
@@ -61,20 +61,29 @@ function needScore(state, ac, r) {
   return spill(r) / Math.max(1, r.last.seatTotal) + (r.last.lf > 0.9 ? 0.5 : 0) + (r.last.profit > 0 ? 0.2 : 0);
 }
 
+const noFit = new WeakMap();
+
 // Weekly: put idle aircraft to work on the routes with the most unmet demand.
 export function autoFleet(state) {
   if (!state.autopilot?.fleet) return [];
   const done = [];
   for (const ac of state.fleet) {
     if (ac.schedule.length || ac.contractHours || ac.retired || ac.grounded || ac.deliveryWeek > state.week + 2) continue;
+    // An aircraft that fitted nowhere is retried monthly or when the network changes.
+    const miss = noFit.get(ac);
+    if (miss && miss.routes === state.routes.length && state.week - miss.week < 4) continue;
     const best = state.routes.map((r) => ({ r, score: needScore(state, ac, r) })).filter((x) => x.score > 0).sort((a, b) => b.score - a.score)[0];
-    if (!best) continue;
+    if (!best) {
+      noFit.set(ac, { routes: state.routes.length, week: state.week });
+      continue;
+    }
     const r = best.r;
     // Fill the shortfall but stay sensible: a daily-ish rotation, or whatever the aircraft can do.
     const want = !routeFreq(state, r) ? 14 : Math.max(3, Math.ceil(spill(r) / 2 / Math.max(1, sum(CLASSES, (c) => ac.config[c] || 0) * 0.85)));
     const freq = Math.min(maxFrequency(state, ac, r), want);
     if (freq < 1) continue;
     const res = setFrequency(state, ac.id, r.id, freq, { autoSlots: false });
+    if (!res.ok) noFit.set(ac, { routes: state.routes.length, week: state.week });
     if (res.ok) {
       done.push({ ac: ac.reg, route: `${r.a}–${r.b}`, freq });
       log(state, `Autopilot: ${ac.reg} assigned to ${r.a}–${r.b} (${freq}×/wk).`, 'info', 'network');
@@ -93,10 +102,10 @@ export function autoFleet(state) {
       if (!to) continue;
       const from = routeById(state, ac.schedule[0].routeId);
       const before = ac.schedule;
-      ac.schedule = [];
+      setSchedule(state, ac, []);
       const res = setFrequency(state, ac.id, to.id, Math.min(14, maxFrequency(state, ac, to)), { autoSlots: false });
       if (!res.ok) {
-        ac.schedule = before;
+        setSchedule(state, ac, before);
         continue;
       }
       done.push({ ac: ac.reg, route: `${to.a}–${to.b}`, freq: entryFreq(ac, to.id) });
@@ -126,18 +135,49 @@ export function autoFleet(state) {
 // ---------------------------------------------------------------------------
 // Suggestions
 
-function idleFor(state, r) {
-  return state.fleet.filter((ac) => isDelivered(state, ac) && canOperate(state, ac, r).ok && maxFrequency(state, ac, r) > entryFreq(ac, r.id)).sort((a, b) => maxFrequency(state, b, r) - maxFrequency(state, a, r))[0];
+// Aircraft with spare weekly hours (computed once per advice pass).
+export function spareAircraft(state) {
+  return state.fleet
+    .filter((ac) => isDelivered(state, ac) && !ac.retired)
+    .map((ac) => ({ ac, spare: availableHours(state, ac) - scheduledHours(state, ac) }))
+    .filter((x) => x.spare > 1);
 }
 
+function idleFor(state, r, spare = spareAircraft(state)) {
+  let best = null;
+  let bestMax = 0;
+  for (const { ac, spare: h } of spare) {
+    if (h < roundTripHours(typeOf(ac), r.distance) || !canOperate(state, ac, r).ok) continue;
+    const max = maxFrequency(state, ac, r);
+    if (max > entryFreq(ac, r.id) && max > bestMax) {
+      best = ac;
+      bestMax = max;
+    }
+  }
+  return best;
+}
+
+// Advice is memoised until the week, the schedule, the routes or the autopilot change.
+const adviceMemo = new WeakMap();
 export function adviseRoutes(state) {
+  const key = `${state.week}|${state.routes.length}|${state.fleet.length}|${JSON.stringify(state.autopilot)}|${state.routes.filter((r) => r.autoPrice === false).length}`;
+  const hit = adviceMemo.get(state);
+  if (hit && hit.key === key && hit.version === scheduleVersion(state)) return hit.out;
+  const out = computeAdvice(state);
+  adviceMemo.set(state, { key, version: scheduleVersion(state), out });
+  return out;
+}
+
+function computeAdvice(state) {
   const out = [];
+  const spareList = spareAircraft(state);
+  const idleFor2 = (r) => idleFor(state, r, spareList);
   const add = (r, kind, tone, text, label) => out.push({ routeId: r.id, kind, tone, text, label, route: `${r.a}–${r.b}` });
   for (const r of state.routes) {
     const l = r.last;
     const freq = routeFreq(state, r);
     if (!freq) {
-      if (idleFor(state, r)) add(r, 'assign', 'warn', `${r.a}–${r.b} has no aircraft. ${idleFor(state, r).reg} has spare hours.`, 'Assign');
+      if (idleFor2(r)) add(r, 'assign', 'warn', `${r.a}–${r.b} has no aircraft. ${idleFor2(r).reg} has spare hours.`, 'Assign');
       continue;
     }
     if (!l?.seatTotal) continue;
@@ -145,7 +185,7 @@ export function adviseRoutes(state) {
     const losing = (r.hist ?? []).slice(-8);
     const chronic = losing.length >= 8 && losing.every((h) => h.profit < 0);
     if (chronic && l.contribution < 0) add(r, 'close', 'bad', `${r.a}–${r.b} has lost money for 8 weeks and doesn't cover its direct costs.`, 'Close route');
-    else if (l.lf > 0.93 && s > l.seatTotal * 0.15 && idleFor(state, r)) add(r, 'capacity', 'good', `${r.a}–${r.b} turned away ${Math.round(s)} passengers last week.`, 'Add flights');
+    else if (l.lf > 0.93 && s > l.seatTotal * 0.15 && idleFor2(r)) add(r, 'capacity', 'good', `${r.a}–${r.b} turned away ${Math.round(s)} passengers last week.`, 'Add flights');
     else if (l.lf > 0.92 && !autoPriced(state, r)) add(r, 'raise', 'good', `${r.a}–${r.b} is ${Math.round(l.lf * 100)}% full — fares can go up.`, 'Fares +7%');
     else if (l.lf < 0.55 && freq > 3) add(r, 'cut', 'warn', `${r.a}–${r.b} is only ${Math.round(l.lf * 100)}% full on ${Math.round(freq)} weekly flights.`, 'Cut 25%');
     else if (l.lf < 0.65 && !autoPriced(state, r)) add(r, 'lower', 'warn', `${r.a}–${r.b} is ${Math.round(l.lf * 100)}% full — cheaper fares would fill seats.`, 'Fares −7%');

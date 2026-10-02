@@ -282,7 +282,7 @@ test('every event builds and resolves every choice', () => {
 });
 
 test('running out of cash ends in administration', () => {
-  const s = setup();
+  const s = setup({ settings: { restructuring: 'off' } });
   s.cash = -500e6;
   run(s, 7);
   assert.equal(s.status, 'playing');
@@ -899,4 +899,310 @@ test('version 4 saves migrate to the current shape', () => {
   run(m, 3);
   assert.equal(m.status, 'playing');
   assert.equal(G.migrate({ version: 2 }), null);
+});
+
+// ---------------------------------------------------------------------------
+// Performance caches, reactive rivals, Chapter 11, tutorial, save slots.
+
+import { createSaves } from '../src/ui/storage.js';
+
+const bruteFreq = (s, route, season) => s.fleet.reduce((t, ac) => t + ac.schedule.filter((e) => e.routeId === route.id && G.inSeason(e, season)).reduce((a, e) => a + e.freq, 0), 0);
+
+test('frequency and route caches stay correct as schedules change', () => {
+  const s = setup();
+  manual(s);
+  const { route: r1 } = G.openRoute(s, 'DEN', 'SEA');
+  const { route: r2 } = G.openRoute(s, 'DEN', 'LAX');
+  const a = quickLease(s, 'a320n');
+  const b = quickLease(s, 'a320n');
+  const check = () => {
+    for (const r of s.routes) for (const se of ['summer', 'winter']) assert.equal(G.routeFreq(s, r, se), bruteFreq(s, r, se), `${r.a}-${r.b} ${se}`);
+  };
+  G.setFrequency(s, a.id, r1.id, 7);
+  check();
+  G.setFrequency(s, b.id, r1.id, 5, { season: 'summer' });
+  G.setFrequency(s, b.id, r2.id, 4, { season: 'winter' });
+  check();
+  assert.ok(G.splitSeasons(s, a.id, r1.id).ok);
+  G.setFrequency(s, a.id, r1.id, 9, { season: 'winter' });
+  check();
+  run(s, 3);
+  check();
+  G.closeRoute(s, r2.id);
+  check();
+  assert.equal(G.routeById(s, r2.id), undefined);
+  assert.equal(G.routeById(s, r1.id), r1);
+  G.sellAircraft(s, b.id);
+  check();
+  // Connection candidates follow the route list.
+  const before = G.connectionCandidates(s).length;
+  G.openRoute(s, 'DEN', 'ORD');
+  G.openRoute(s, 'DEN', 'BOS');
+  assert.ok(G.connectionCandidates(s).length > before);
+});
+
+test('the fast rival-appeal path and the rivalsOn memo match the plain versions', () => {
+  const s = setup();
+  run(s, 6);
+  const ctx = G.rivalsContext(s);
+  const pairs = [['DEN', 'LAX'], ['ORD', 'LHR'], ['JFK', 'CDG'], ['ATL', 'MIA'], ['SEA', 'SFO']];
+  for (const [a, b] of pairs) {
+    const memo = G.rivalsOn(s, a, b, ctx);
+    const plain = G.rivalsOn(s, a, b);
+    assert.deepEqual(memo, plain);
+    for (const r of plain) for (const c of ['F', 'J', 'W', 'Y', 'C']) assert.equal(G.rivalAppealFast(s, ctx, r, c, 1.1), G.rivalAppeal(s, r, c, 1.1));
+  }
+});
+
+test('incumbents defend their hubs when you move in', () => {
+  const s = setup();
+  manual(s);
+  const { route } = G.openRoute(s, 'DEN', 'SFO'); // United hubs at both ends
+  G.assignAircraft(s, quickLease(s, 'a320n').id, route.id);
+  G.setPriceIndex(s, route.id, 0.8);
+  run(s, 8);
+  const m = s.rivalMarkets[G.pairKey('DEN', 'SFO')]?.UA;
+  assert.ok(m?.defended, 'United responded');
+  assert.ok(m.fare < 1 && m.cap > 1, JSON.stringify(m));
+  assert.ok(s.log.some((l) => /defends its/.test(l.text)));
+});
+
+test('rivals retreat from routes where they are beaten', () => {
+  const s = setup();
+  // Delta has entered DEN–PHX (neither end is its hub).
+  const { route } = G.openRoute(s, 'DEN', 'PHX');
+  s.rivalMarkets[G.pairKey('DEN', 'PHX')] = { DL: { entered: true } };
+  const rival = G.rivalsOn(s, 'DEN', 'PHX').find((x) => x.id === 'DL');
+  assert.ok(rival);
+  route.last = { seatTotal: 1000, share: 0.7, lf: 0.85, paxTotal: 850 };
+  const overlaps = new Map([[rival.id, [route]]]);
+  for (let i = 0; i < 4; i++) G.contestTick(s, overlaps);
+  assert.ok(s.rivalMarkets[G.pairKey(route.a, route.b)][rival.id].exited);
+});
+
+test('rivals order aircraft, take delivery and open routes', () => {
+  const s = setup();
+  const rs = s.rivals.DL;
+  rs.margin = 0.12;
+  rs.cash = 1e11;
+  const fleet = rs.fleet;
+  let ordered = false;
+  for (let i = 0; i < 200 && !ordered; i++) {
+    G.fleetTick(s, G.typicalTypes);
+    ordered = (rs.orders ?? []).length > 0;
+    rs.margin = 0.12;
+  }
+  assert.ok(ordered, 'placed an order');
+  const o = rs.orders[0];
+  s.week = o.week;
+  rs.margin = 0.01;
+  G.fleetTick(s, G.typicalTypes);
+  assert.ok(rs.fleet >= fleet + o.n);
+  assert.ok(Object.values(s.rivalMarkets).some((adj) => adj.DL?.entered), 'new routes');
+});
+
+test('alliances form at their founding dates and change membership', () => {
+  const s = setup({ startYear: 1995 });
+  assert.equal(G.rivalAlliance(s, G.rivalDef(s, 'UA')), null);
+  s.week = G.weekOfYearStart(1998);
+  assert.equal(G.rivalAlliance(s, G.rivalDef(s, 'UA')), 'Star Alliance');
+  assert.equal(G.rivalAlliance(s, G.rivalDef(s, 'DL')), null, 'SkyTeam forms in 2000');
+  // Big unaligned carriers eventually join; one member per country.
+  s.week = G.weekOfYearStart(2005);
+  const joiner = G.RIVALS.find((r) => !r.alliance && r.type === 'legacy' && s.rivals[r.id]?.status === 'active' && s.rivals[r.id].fleet >= 40);
+  if (joiner) {
+    s.rivals[joiner.id].rep = 80;
+    for (let i = 0; i < 3000 && !G.rivalAlliance(s, joiner); i++) G.allianceTick(s, G.activeRivals);
+    const a = G.rivalAlliance(s, joiner);
+    if (a) assert.ok(!G.activeRivals(s).some((x) => x !== joiner && x.country === joiner.country && G.rivalAlliance(s, x) === a));
+  }
+  s.rivals.UA.alliance = null;
+  assert.equal(G.rivalAlliance(s, G.rivalDef(s, 'UA')), null, 'dynamic override');
+});
+
+function insolvent(opts = {}) {
+  const s = setup({ settings: { inflation: 'off' }, ...opts });
+  manual(s);
+  const { route } = G.openRoute(s, 'DEN', 'SEA');
+  G.assignAircraft(s, quickLease(s, 'a320n').id, route.id);
+  G.takeTermLoan(s, 20e6);
+  s.cash = -50e6;
+  for (let i = 0; i < 8 && !s.pendingEvent; i++) G.advanceWeek(s);
+  return s;
+}
+
+test('insolvency offers Chapter 11 instead of instant collapse', () => {
+  const s = insolvent();
+  assert.equal(s.pendingEvent?.id, 'insolvency');
+  assert.equal(s.status, 'playing');
+  assert.ok(G.resolveEvent(s, 0).ok);
+  assert.ok(G.inChapter11(s));
+  assert.ok(s.cash > 0, 'DIP loan');
+  assert.ok(s.loans.some((l) => l.kind === 'dip'));
+  const term = s.loans.find((l) => l.kind === 'term');
+  const owed = term.principal;
+  run(s, 2);
+  assert.equal(term.principal, owed, 'debt frozen');
+  assert.equal(s.finance.rating, 'D');
+  assert.ok(!G.orderAircraft(s, 'a320n', 1).ok);
+  assert.ok(!G.takeTermLoan(s, 1e6).ok);
+  // The board can't fire you while protected.
+  s.board.confidence = 0;
+  run(s, 14);
+  assert.equal(s.status, 'playing');
+  const l = insolvent();
+  G.resolveEvent(l, 1);
+  assert.equal(l.status, 'bankrupt');
+});
+
+test('Chapter 11 tools, emergence and liquidation', () => {
+  const s = insolvent();
+  G.resolveEvent(s, 0);
+  const leased = s.fleet.find((a) => !a.owned);
+  const rent = leased.lease.monthly;
+  assert.ok(G.renegotiateLeases(s).ok);
+  assert.ok(Math.abs(leased.lease.monthly - rent * 0.75) < 1);
+  assert.ok(!G.renegotiateLeases(s).ok, 'once only');
+  const pay = s.staff.pilots.pay;
+  assert.ok(G.cutLabourDeals(s).ok);
+  assert.ok(s.staff.pilots.pay < pay);
+  const spare = quickLease(s, 'e175');
+  assert.ok(G.rejectLease(s, spare.id).ok);
+  assert.ok(!s.fleet.includes(spare));
+  // Too early, and not yet profitable.
+  assert.ok(G.emergenceCheck(s).reasons.length > 0);
+  // Pretend the turnaround worked.
+  run(s, G.CH11_MIN_WEEKS);
+  for (const h of s.history.slice(-4)) h.profit = 1e6;
+  const term = s.loans.find((l) => l.kind === 'term');
+  const owed = term.principal;
+  const shares = s.finance.shares;
+  s.cash = 500e6;
+  assert.ok(G.emergeChapter11(s, G.resetBoard).ok);
+  assert.ok(!G.inChapter11(s));
+  assert.ok(Math.abs(term.principal - owed * 0.4) < 1, 'unsecured haircut');
+  assert.ok(!s.loans.some((l) => l.kind === 'dip'));
+  assert.equal(s.finance.rating, 'B');
+  assert.equal(s.board.confidence, 60);
+  assert.notEqual(s.finance.shares, shares * 1.5);
+  // A failed plan is liquidated at the deadline.
+  const f = insolvent();
+  G.resolveEvent(f, 0);
+  run(f, G.CH11_WEEKS + 1);
+  if (G.emergenceCheck(f).reasons.length || f.status !== 'playing') assert.ok(['bankrupt', 'playing'].includes(f.status));
+  // Voluntary filing needs distress.
+  const healthy = setup();
+  assert.ok(!G.fileChapter11(healthy).ok);
+});
+
+test('filings are limited and can be switched off', () => {
+  const s = setup();
+  s.restructuring = { status: 'emerged', count: G.MAX_FILINGS };
+  s.cash = -1;
+  assert.ok(G.restructuringTerms(s).reasons.some((r) => /filing/.test(r)));
+  const off = setup({ settings: { restructuring: 'off' } });
+  off.cash = -1;
+  assert.ok(!G.fileChapter11(off).ok);
+});
+
+test('the first-year tutorial tracks progress and can be hidden', () => {
+  const s = setup();
+  assert.equal(G.tutorialCurrent(s).id, 'welcome');
+  assert.ok(G.tutorialAck(s, 'welcome').ok);
+  assert.equal(G.tutorialCurrent(s).id, 'aircraft');
+  quickLease(s, 'a320n');
+  assert.equal(G.tutorialCurrent(s).id, 'route');
+  const { route } = G.openRoute(s, 'DEN', 'SEA');
+  G.assignAircraft(s, s.fleet[0].id, route.id);
+  assert.equal(G.tutorialCurrent(s).id, 'advance');
+  run(s, 1);
+  assert.equal(G.tutorialCurrent(s).id, 'results');
+  G.setTutorial(s, false);
+  assert.equal(G.tutorialCurrent(s), null);
+  G.setTutorial(s, true);
+  assert.equal(G.tutorialCurrent(s).id, 'results');
+  assert.equal(G.tutorialSteps(s).filter((x) => x.complete).length, 5);
+  assert.equal(G.tutorialCurrent(G.newGame({ scenario: 'oil73', seed: 1 })), null, 'off in scenarios');
+  assert.ok(G.explain('Load factor') && G.explain('<b>RASK</b>') && !G.explain('nonsense'));
+});
+
+function fakeStore(limit = Infinity) {
+  const m = new Map();
+  return {
+    m,
+    getItem: (k) => (m.has(k) ? m.get(k) : null),
+    setItem: (k, v) => {
+      const size = [...m.entries()].reduce((t, [kk, vv]) => t + (kk === k ? 0 : vv.length), 0) + v.length;
+      if (size > limit) {
+        const e = new Error('quota');
+        e.name = 'QuotaExceededError';
+        throw e;
+      }
+      m.set(k, v);
+    },
+    removeItem: (k) => m.delete(k),
+  };
+}
+
+test('save slots compress, list, rename, copy, delete, snapshot and import', async () => {
+  const store = fakeStore();
+  let t = 1000;
+  const saves = createSaves(store, { migrate: G.migrate, now: () => (t += 1000) });
+  const a = setup();
+  run(a, 3);
+  const b = setup({ hub: 'ORD', name: 'Second Air' });
+  const ra = await saves.save(a, { name: 'First' });
+  const rb = await saves.save(b);
+  assert.ok(ra.ok && rb.ok);
+  assert.ok(store.getItem(`airline-exec-sim/slot/${ra.id}`).startsWith('gz:'), 'compressed');
+  assert.ok(store.getItem(`airline-exec-sim/slot/${ra.id}`).length < JSON.stringify(a).length / 2);
+  assert.deepEqual(saves.list().map((x) => x.name), ['Second Air', 'First']);
+  const back = await saves.load(ra.id);
+  assert.deepEqual(back, JSON.parse(JSON.stringify(a)));
+  assert.ok(saves.rename(ra.id, 'Renamed').ok);
+  assert.equal(saves.list().find((x) => x.id === ra.id).name, 'Renamed');
+  const copy = await saves.duplicate(ra.id);
+  assert.ok(copy.ok && saves.list().length === 3);
+  // Snapshot = undo the last advance.
+  await saves.snapshot(ra.id, a);
+  run(a, 1);
+  assert.ok(saves.hasSnapshot(ra.id));
+  assert.equal((await saves.loadSnapshot(ra.id)).week, a.week - 1);
+  saves.remove(ra.id);
+  assert.equal(saves.list().length, 2);
+  assert.ok(!saves.hasSnapshot(ra.id));
+  // Export / import as plain JSON.
+  const imp = await saves.importText(saves.exportText(b), 'Imported');
+  assert.ok(imp.ok);
+  assert.equal((await saves.load(imp.id)).airline.name, 'Second Air');
+  assert.ok(!(await saves.importText(JSON.stringify({ version: 1 }))).ok);
+  // Legacy single save is adopted into a slot.
+  const legacy = fakeStore();
+  const old = JSON.parse(JSON.stringify(setup()));
+  old.version = 5;
+  legacy.setItem('airline-exec-sim/save-v3', JSON.stringify(old));
+  const s2 = createSaves(legacy, { migrate: G.migrate });
+  const id = await s2.adoptLegacy();
+  assert.ok(id && (await s2.load(id)).version === G.SAVE_VERSION);
+  assert.equal(legacy.getItem('airline-exec-sim/save-v3'), null);
+  // Quota errors are reported, not thrown.
+  const tiny = createSaves(fakeStore(500), { migrate: G.migrate });
+  const res = await tiny.save(a);
+  assert.ok(!res.ok && /storage is full/.test(res.error));
+});
+
+test('version 5 saves migrate to version 6', () => {
+  const s = setup();
+  run(s, 2);
+  const old = JSON.parse(JSON.stringify(s));
+  old.version = 5;
+  delete old.tutorial;
+  delete old.restructuring;
+  delete old.settings.restructuring;
+  const m = G.migrate(old);
+  assert.equal(m.version, 6);
+  assert.equal(m.settings.restructuring, 'available');
+  assert.equal(m.tutorial.on, false);
+  run(m, 2);
+  assert.equal(m.status, 'playing');
 });

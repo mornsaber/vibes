@@ -20,6 +20,7 @@ export function render(c) {
   const quote = G.hedgeQuote(s, 0.25, 26);
   const rcfHeadroom = Math.max(0, G.RCF_LIMIT[s.finance.rating] - G.rcfDrawn(s));
   return `<div class="page-head"><h1>Finances</h1></div>
+  ${restructuringPanel(s)}
   <div class="grid kpis">
     ${kpi('Cash on hand', money(s.cash), { cls: s.cash < 0 ? 'bad' : '' })}
     ${kpi('Net / week', money(r?.profit ?? 0), { cls: (r?.profit ?? 0) < 0 ? 'bad' : 'good', sub: `EBITDA ${money(r?.ebitda ?? 0)}` })}
@@ -65,7 +66,7 @@ export function render(c) {
     </div>`)}
   </div>
   ${panel('Loans', table(s.loans, [
-    { h: 'Facility', v: (l) => ({ term: 'Term loan', secured: `Secured · ${s.fleet.find((a) => a.id === l.aircraftId)?.reg ?? ''}`, rcf: 'Revolving credit' })[l.kind] },
+    { h: 'Facility', v: (l) => ({ term: 'Term loan', secured: `Secured · ${s.fleet.find((a) => a.id === l.aircraftId)?.reg ?? ''}`, rcf: 'Revolving credit', dip: 'DIP loan (Chapter 11)' })[l.kind] + (G.frozenDebt(s, l) ? ' <small class="warn">frozen</small>' : '') },
     { h: 'Original', cls: 'num', v: (l) => money(l.original) },
     { h: 'Outstanding', cls: 'num', v: (l) => money(l.principal) },
     { h: 'Rate', cls: 'num', v: (l) => pct(l.rate, 2) },
@@ -78,7 +79,7 @@ export function render(c) {
     { h: 'Lessor', v: (a) => esc(a.lease.lessor) },
     { h: 'Monthly rent', cls: 'num', v: (a) => money(a.lease.monthly) },
     { h: 'Ends', v: (a) => `${G.dateLabel(a.lease.endWeek)} <small class="${a.lease.endWeek - s.week < 13 ? 'warn' : 'muted'}">(${a.lease.endWeek - s.week} wk)</small>` },
-    { h: '', v: (a) => `<button class="small" data-action="extend-lease" data-id="${a.id}">Extend</button>` },
+    { h: '', v: (a) => `<button class="small" data-action="extend-lease" data-id="${a.id}">Extend</button>${G.inChapter11(s) ? ` <button class="small danger" data-action="reject-lease" data-id="${a.id}">Reject</button>` : ''}` },
   ], { empty: 'No leased aircraft.' }))}
   <div class="grid cols-2">
     ${panel('Fuel hedging', `${statement([
@@ -104,7 +105,41 @@ export function render(c) {
   </div>`;
 }
 
+// Chapter 11: offer when distressed; the toolkit while under protection.
+function restructuringPanel(s) {
+  const r = s.restructuring;
+  if (G.inChapter11(s)) {
+    const chk = G.emergenceCheck(s);
+    const left = r.deadlineWeek - s.week;
+    return panel(`Chapter 11 — ${left} weeks until the court decides`, `<div class="grid cols-2">
+      <div class="stack">
+        <p>Debt payments are frozen and the ${money(r.dip)} DIP loan is funding operations. Fix the business, then emerge: unsecured debt is cut 60% and secured debt 30%, the old shareholders are wiped out and a new board takes over. Miss the deadline without a profitable plan and the airline is liquidated.</p>
+        <div class="row wrap">
+          <button data-action="ch11-leases" ${r.leases ? 'disabled' : ''}>${r.leases ? 'Leases renegotiated ✓' : 'Renegotiate leases (−25% rent)'}</button>
+          <button data-action="ch11-labour" ${r.unions ? 'disabled' : ''}>${r.unions ? 'Labour deals reopened ✓' : 'Reopen labour contracts (pay −12%)'}</button>
+          <a class="button-like" href="#network/health">Shed losing routes ›</a>
+        </div>
+        <p class="muted small">Reject individual leases below to hand aircraft back without penalty (${r.rejected} so far). Selling owned aircraft and closing routes work as usual.</p>
+      </div>
+      <div class="stack">
+        <h3>Plan of reorganisation</h3>
+        <ul class="plain small">${[[s.week - r.startWeek >= G.CH11_MIN_WEEKS, `At least ${G.CH11_MIN_WEEKS} weeks in protection (${s.week - r.startWeek} so far)`], [chk.operating > 0, `Four-week average profit above zero (now ${money(chk.operating)}/wk)`]].map(([okk, t]) => `<li>${okk ? '✅' : '⬜'} ${t}</li>`).join('')}</ul>
+        <button class="primary" data-action="ch11-emerge" ${chk.reasons.length ? 'disabled' : ''}>Emerge from Chapter 11</button>
+      </div>
+    </div>`, { cls: 'ch11' });
+  }
+  const t = G.restructuringTerms(s);
+  if (!t.distressed || s.settings.restructuring === 'off') return r?.status === 'emerged' ? `<p class="callout small">Emerged from Chapter 11 on ${G.dateLabel(r.emergedWeek)} with ${money(r.forgiven)} of debt forgiven.</p>` : '';
+  return panel('Financial distress', `<p>Your airline is in trouble. Filing for Chapter 11 freezes debt payments and brings a ${money(t.dip)} DIP loan while you restructure — at the cost of reputation, morale and, eventually, the current shareholders.</p>
+    ${t.reasons.length ? `<p class="muted small">${esc(t.reasons[0])}</p>` : '<button class="danger" data-action="ch11-file">File for Chapter 11</button>'}`, { cls: 'ch11' });
+}
+
 export const actions = {
+  'ch11-file': (el, ctx) => (confirm('File for Chapter 11 court protection?') ? G.fileChapter11(ctx.game) : null),
+  'ch11-leases': (el, ctx) => G.renegotiateLeases(ctx.game),
+  'ch11-labour': (el, ctx) => (confirm('Force concessionary labour contracts? Morale will suffer and strong unions may strike.') ? G.cutLabourDeals(ctx.game) : null),
+  'ch11-emerge': (el, ctx) => G.emergeChapter11(ctx.game, G.resetBoard),
+  'reject-lease': (el, ctx) => (confirm('Reject this lease and hand the aircraft back?') ? G.rejectLease(ctx.game, el.dataset.id) : null),
   'term-loan': (el, ctx) => G.takeTermLoan(ctx.game, fromNominal(formValues(el).amount)),
   'rcf-draw': (el, ctx) => G.drawRcf(ctx.game, fromNominal(formValues(el).amount)),
   repay: (el, ctx) => G.repayLoan(ctx.game, el.dataset.id),

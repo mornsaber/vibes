@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node scripts/serve.js",
     "test": "node --test test/*.test.js",
-    "simulate": "node scripts/simulate.js"
+    "simulate": "node scripts/simulate.js",
+    "profile": "node scripts/profile.js"
   },
   "engines": {
     "node": ">=18"

@@ -235,11 +235,8 @@ export const actions = {
   },
   'set-freq': (el, ctx) => G.setFrequency(ctx.game, el.dataset.ac, el.dataset.route, formValues(el).freq, { season: el.dataset.season ?? 'all' }),
   'split-season'(el, ctx) {
-    const ac = ctx.game.fleet.find((a) => a.id === el.dataset.ac);
-    const e = ac.schedule.find((x) => x.routeId === el.dataset.route);
-    if (e) e.season = 'summer';
-    ac.schedule.push({ routeId: el.dataset.route, freq: e?.freq ?? 0, season: 'winter' });
-    return { ok: true, message: 'Summer and winter can now be planned separately.' };
+    const res = G.splitSeasons(ctx.game, el.dataset.ac, el.dataset.route);
+    return res.ok ? { ok: true, message: 'Summer and winter can now be planned separately.' } : res;
   },
   unassign: (el, ctx) => G.setFrequency(ctx.game, el.dataset.ac, el.dataset.route, 0, { season: el.dataset.season ?? 'all' }),
   'add-ac'(el, ctx) {

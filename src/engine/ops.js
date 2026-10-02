@@ -11,7 +11,7 @@ import { clamp, sum, distanceKm, randNormal, pairKey, yearOf } from './core.js';
 import { eraDistribution } from '../data/eras.js';
 import {
   marketNow, classShares, cargoNow, seasonality, fareNow, refCargoRate,
-  priceEffect, rivalsOn, rivalAppeal, OUTSIDE_OPTION, sameMarket, rivalDef,
+  priceEffect, rivalsOn, rivalsContext, rivalAppeal, rivalAppealFast, OUTSIDE_OPTION, sameMarket, rivalDef,
   priceSensitiveShare, flexMult, advMult, MARKET_SPREAD, DEFAULT_RM, FLEX_ELASTICITY, ADV_ELASTICITY, seasonalFare,
 } from './market.js';
 import { typeOf, isOperational, isFreighter, fuelFactor, productQuality, ageYears } from './fleet.js';
@@ -72,6 +72,36 @@ function disruption(state, route) {
   let f = 1;
   for (const d of state.disruptions) if (d.codes.includes(route.a) || d.codes.includes(route.b)) f = Math.min(f, d.factor);
   return f;
+}
+
+// One-stop itineraries the network could sell (geometry only), cached until
+// the route list or the hub list changes.
+const candCache = new WeakMap();
+export function connectionCandidates(state) {
+  const key = `${state.routes.length}|${state.hubs.map((h) => h.code).join(',')}`;
+  const hit = candCache.get(state.routes);
+  if (hit && hit.key === key) return hit.list;
+  const nonstop = new Set(state.routes.map((r) => pairKey(r.a, r.b)));
+  const list = [];
+  state.hubs.forEach((hub, hi) => {
+    const spokes = state.routes.filter((r) => r.a === hub.code || r.b === hub.code);
+    for (let i = 0; i < spokes.length; i++) {
+      for (let j = i + 1; j < spokes.length; j++) {
+        const x = spokes[i].a === hub.code ? spokes[i].b : spokes[i].a;
+        const y = spokes[j].a === hub.code ? spokes[j].b : spokes[j].a;
+        if (x === y) continue;
+        const k = pairKey(x, y);
+        if (nonstop.has(k)) continue;
+        const d = distanceKm(x, y);
+        if (d < 300) continue;
+        const detour = (spokes[i].distance + spokes[j].distance) / d;
+        if (detour > 1.5) continue;
+        list.push({ hub: hi, ri: spokes[i].id, rj: spokes[j].id, x, y, k, d, detourQ: 1 - (detour - 1) * 1.2 });
+      }
+    }
+  });
+  candCache.set(state.routes, { key, list });
+  return list;
 }
 
 export function simulateOperations(state, { fuelPrice, macro }) {
@@ -144,32 +174,24 @@ export function simulateOperations(state, { fuelPrice, macro }) {
     nonstop.set(pairKey(r.a, r.b), leg);
     flows.push({ a: r.a, b: r.b, d: r.distance, legs: [leg], via: null });
   }
+  const hubFreq = new Map(state.hubs.map((h) => [h.code, sum(Object.values(legs).filter((l) => l.route.a === h.code || l.route.b === h.code), (l) => l.s.freq)]));
   const best = new Map();
-  for (const hub of state.hubs) {
-    const spokes = Object.values(legs).filter((l) => l.route.a === hub.code || l.route.b === hub.code);
-    const hubWeekly = sum(spokes, (l) => l.s.freq);
-    for (let i = 0; i < spokes.length; i++) {
-      for (let j = i + 1; j < spokes.length; j++) {
-        const x = spokes[i].route.a === hub.code ? spokes[i].route.b : spokes[i].route.a;
-        const y = spokes[j].route.a === hub.code ? spokes[j].route.b : spokes[j].route.a;
-        if (x === y) continue;
-        const k = pairKey(x, y);
-        if (nonstop.has(k)) continue;
-        const d = distanceKm(x, y);
-        if (d < 300) continue;
-        const detour = (spokes[i].route.distance + spokes[j].route.distance) / d;
-        if (detour > 1.5) continue;
-        const prev = best.get(k);
-        const q = hubConnectionQuality(hub, spokes[i].s.freq, spokes[j].s.freq, hubWeekly) * (1 - (detour - 1) * 1.2);
-        if (!prev || q > prev.q) best.set(k, { a: x, b: y, d, legs: [spokes[i], spokes[j]], via: hub.code, q });
-      }
-    }
+  const legByRoute = new Map(Object.values(legs).map((l) => [l.route.id, l]));
+  for (const c of connectionCandidates(state)) {
+    const hub = state.hubs[c.hub];
+    const li = legByRoute.get(c.ri);
+    const lj = legByRoute.get(c.rj);
+    if (!li || !lj) continue;
+    const q = hubConnectionQuality(hub, li.s.freq, lj.s.freq, hubFreq.get(hub.code)) * c.detourQ;
+    const prev = best.get(c.k);
+    if (!prev || q > prev.q) best.set(c.k, { a: c.x, b: c.y, d: c.d, legs: [li, lj], via: hub.code, q });
   }
   flows.push(...best.values());
 
   // 3. Demand capture per itinerary and cabin, split into flexible and
   //    price-sensitive (advance-purchase) travellers.
   const marketing = marketingEffect(state);
+  const rivalCtx = rivalsContext(state);
   for (const f of flows) {
     const A = airportByCode[f.a];
     const B = airportByCode[f.b];
@@ -178,7 +200,7 @@ export function simulateOperations(state, { fuelPrice, macro }) {
     const rawSeason = seasonality(f.a, f.b, state.week);
     const season = rawSeason * macro * tickShockRegions(state, f.a, f.b);
     const shares = classShares(f.a, f.b);
-    const rivals = rivalsOn(state, f.a, f.b);
+    const rivals = rivalsOn(state, f.a, f.b, rivalCtx);
     const lead = f.legs[0];
     const brand = lead.brand;
     const kind = brandKind(brand);
@@ -208,7 +230,8 @@ export function simulateOperations(state, { fuelPrice, macro }) {
       f.dA[c] = 0;
       if (f.legs.some((l) => l.cap[c] <= 0) || freq <= 0) continue;
       const generic = long ? 0.25 : 0.1;
-      const theirs = sum(rivals, (r) => rivalAppeal(state, r, c, biz)) + generic + OUTSIDE_OPTION[c];
+      let theirs = generic + OUTSIDE_OPTION[c];
+      for (const r of rivals) theirs += rivalAppealFast(state, rivalCtx, r, c, biz);
       if (c === 'C') {
         const idx = sum(f.legs, (l) => l.route.cargoIdx) / f.legs.length;
         f.fare.C = refCargoRate(f.d) * idx;

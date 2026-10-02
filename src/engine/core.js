@@ -82,15 +82,16 @@ export function weeksInUnit(week, unit) {
 
 const distCache = new Map();
 export function distanceKm(a, b) {
-  const k = a < b ? a + b : b + a;
-  let d = distCache.get(k);
+  let row = distCache.get(a);
+  if (!row) distCache.set(a, (row = new Map()));
+  let d = row.get(b);
   if (d !== undefined) return d;
   const ca = airportByCode[a];
   const cb = airportByCode[b];
   const r = (x) => (x * Math.PI) / 180;
   const h = Math.sin(r(cb.lat - ca.lat) / 2) ** 2 + Math.cos(r(ca.lat)) * Math.cos(r(cb.lat)) * Math.sin(r(cb.lon - ca.lon) / 2) ** 2;
   d = Math.round(6371 * 2 * Math.asin(Math.sqrt(h)));
-  distCache.set(k, d);
+  row.set(b, d);
   return d;
 }
 

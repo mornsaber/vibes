@@ -4,6 +4,7 @@
 import { RATINGS, RATING_SPREAD } from '../data/business.js';
 import { clamp, fail, ok, newId, log, money, cents, sum } from './core.js';
 import { typeOf, aircraftValue, isDelivered, weeklyFromMonthly } from './fleet.js';
+import { frozenDebt, ch11Blocked, inChapter11 } from './restructuring.js';
 
 // ---------------------------------------------------------------------------
 // Fuel hedging
@@ -74,6 +75,8 @@ function addLoan(state, kind, amount, years, extra = {}) {
 }
 
 export function takeTermLoan(state, amount) {
+  const blocked = ch11Blocked(state, 'new loans');
+  if (blocked) return blocked;
   amount = Math.round(Number(amount));
   if (!(amount > 0)) return fail('Enter an amount');
   const limit = termLoanLimit(state);
@@ -98,6 +101,8 @@ export function takeSecuredLoan(state, acId) {
 }
 
 export function drawRcf(state, amount) {
+  const blocked = ch11Blocked(state, 'new loans');
+  if (blocked) return blocked;
   amount = Math.round(Number(amount));
   const limit = RCF_LIMIT[state.finance.rating] - rcfDrawn(state);
   if (!(amount > 0)) return fail('Enter an amount');
@@ -130,15 +135,16 @@ export function serviceDebt(state) {
   let interest = 0;
   let principal = 0;
   for (const l of state.loans) {
+    if (frozenDebt(state, l)) continue; // automatic stay under Chapter 11
     const i = (l.principal * l.rate) / 52;
     interest += i;
-    if (l.kind === 'rcf') continue;
+    if (l.kind === 'rcf' || l.kind === 'dip') continue;
     const p = Math.min(l.principal, l.payment - i);
     principal += p;
     l.principal -= p;
     l.weeksLeft -= 1;
   }
-  const done = state.loans.filter((l) => l.kind !== 'rcf' && (l.weeksLeft <= 0 || l.principal < 1));
+  const done = state.loans.filter((l) => l.kind !== 'rcf' && l.kind !== 'dip' && (l.weeksLeft <= 0 || l.principal < 1));
   if (done.length) {
     state.loans = state.loans.filter((l) => !done.includes(l));
     log(state, `Paid off ${done.length} loan(s).`, 'good', 'finance');
@@ -165,6 +171,10 @@ export function creditMetrics(state) {
 }
 
 export function rateCredit(state) {
+  if (inChapter11(state)) {
+    state.finance.rating = 'D';
+    return;
+  }
   const m = creditMetrics(state);
   let score = 50;
   if (m.ebitdar <= 0) score -= 20;
@@ -230,6 +240,8 @@ export function marketCap(state) {
 export const sharePrice = (state) => marketCap(state) / state.finance.shares;
 
 export function issueShares(state, amount) {
+  const blocked = ch11Blocked(state, 'share issues');
+  if (blocked) return blocked;
   amount = Math.round(Number(amount));
   const cap = marketCap(state);
   if (!(amount > 0)) return fail('Enter an amount');
@@ -244,6 +256,8 @@ export function issueShares(state, amount) {
 }
 
 export function payDividend(state, amount) {
+  const blocked = ch11Blocked(state, 'dividends');
+  if (blocked) return blocked;
   amount = Math.round(Number(amount));
   if (!(amount > 0)) return fail('Enter an amount');
   if (state.cash - amount < 20e6) return fail('Keep at least $20M of cash after a dividend');

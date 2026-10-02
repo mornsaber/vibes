@@ -9,10 +9,11 @@ import { AIRCRAFT, inService } from '../data/aircraft.js';
 import { ROLE_IDS } from '../data/business.js';
 import { eraFuel, regionDemand } from '../data/eras.js';
 import { clamp, fail, ok, rand, randInt, randNormal, pick, weightedPick, log, money, pairKey, sum, yearOf, distanceKm } from './core.js';
-import { rivalsOn, sameMarket, rivalDef, rivalFliesNonstop, trafficRights, marketNow } from './market.js';
+import { rivalsOn, rivalsContext, rivalAlliance, ALLIANCE_FOUNDED, sameMarket, rivalDef, rivalFliesNonstop, trafficRights, marketNow } from './market.js';
 import { makeAircraft, monthlyLeaseRate } from './fleet.js';
 import { openRoute, canOperate, maxFrequency, setFrequency, isHub, newHub } from './network.js';
 import { foreignStakeCap } from './regulation.js';
+import { contestTick, fleetTick, allianceTick, driftMarkets } from './rivalai.js';
 import { launchBrand } from './brands.js';
 import { staffRequirements, addToGrade } from './staff.js';
 import { marketCap, sharePrice } from './finance.js';
@@ -129,8 +130,22 @@ function exitRival(state, r, how) {
   log(state, `${r.name} has ${how}.`, 'good', 'rivals');
 }
 
-export function overlapRoutes(state, rivalId) {
-  return state.routes.filter((r) => rivalsOn(state, r.a, r.b).some((x) => x.id === rivalId && x.nonstop));
+// Your routes each rival flies nonstop, for every rival in one pass.
+export function overlapIndex(state) {
+  const ctx = rivalsContext(state, { memo: false });
+  const idx = new Map();
+  for (const r of state.routes) {
+    for (const x of rivalsOn(state, r.a, r.b, ctx)) {
+      if (!x.nonstop) continue;
+      if (!idx.has(x.id)) idx.set(x.id, []);
+      idx.get(x.id).push(r);
+    }
+  }
+  return idx;
+}
+
+export function overlapRoutes(state, rivalId, ctx = rivalsContext(state, { memo: false })) {
+  return state.routes.filter((r) => rivalsOn(state, r.a, r.b, ctx).some((x) => x.id === rivalId && x.nonstop));
 }
 
 export function rivalValuation(state, id) {
@@ -140,6 +155,7 @@ export function rivalValuation(state, id) {
 
 export function rivalsTick(state) {
   eraTransitions(state);
+  const overlaps = overlapIndex(state);
   const year = yearOf(state.week);
   const fuelGap = state.macro.fuel - eraFuel(year);
   const homeRegion = airportByCode[state.hubs[0].code].region;
@@ -154,7 +170,8 @@ export function rivalsTick(state) {
     const profit = rs.fleet * 1.2e6 * rs.margin;
     rs.cash += profit;
     rs.profitQ += profit;
-    const growth = r.startup ? (rs.margin > 0.02 ? 0.03 : -0.01) : rs.margin > 0.04 ? 0.004 : -0.004;
+    // Established carriers mostly grow through their aircraft orders (see rivalai.js).
+    const growth = r.startup ? (rs.margin > 0.02 ? 0.03 : -0.01) : rs.margin > 0.04 ? 0.002 : -0.003;
     rs.fleet = Math.max(3, Math.round(rs.fleet * (1 + growth) + (r.startup && rs.margin > 0.02 && rand(state) < 0.5 ? 1 : 0)));
     rs.rep = clamp(rs.rep + randNormal(state) * 0.8, 25, 98);
     rs.payIdx = clamp(rs.payIdx + (rs.margin > 0.06 ? 0.005 : -0.003) + randNormal(state) * 0.005, 0.85, 1.35);
@@ -172,9 +189,9 @@ export function rivalsTick(state) {
     }
 
     // Hostility toward you.
-    const overlap = overlapRoutes(state, r.id);
+    const overlap = overlaps.get(r.id) ?? [];
     const pressure = sum(overlap, (rt) => (rt.last?.share ?? 0) * (rt.last?.paxTotal ?? 0)) / Math.max(1, rs.fleet * 300);
-    const allied = state.partners.codeshares.includes(r.id) || (state.partners.alliance && r.alliance === state.partners.alliance) || state.stakes[r.id];
+    const allied = state.partners.codeshares.includes(r.id) || (state.partners.alliance && rivalAlliance(state, r) === state.partners.alliance) || state.stakes[r.id];
     rs.hostility = clamp(rs.hostility + (overlap.length ? (0.01 + pressure * r.aggression) * agg : -0.04) - (allied ? 0.1 : 0), 0, 1);
     rs.relation = clamp(rs.relation + (allied ? 1 : 0) - rs.hostility * 3 + 0.5, 0, 100);
 
@@ -190,9 +207,6 @@ export function rivalsTick(state) {
       } else if (roll < r.aggression * agg * rs.hostility * 0.45) {
         m.cap = Math.min(2, (m.cap ?? 1) * 1.25);
         log(state, `${r.name} adds capacity on ${rt.a}–${rt.b}.`, 'bad', 'rivals');
-      } else if (share > 0.5 && rand(state) < 0.03) {
-        m.exited = true;
-        log(state, `${r.name} withdraws from ${rt.a}–${rt.b} — you won.`, 'good', 'rivals');
       }
     }
 
@@ -220,17 +234,12 @@ export function rivalsTick(state) {
     }
   }
 
-  // Market adjustments drift back to normal; exits occasionally reverse.
-  for (const [k, adj] of Object.entries(state.rivalMarkets)) {
-    for (const [id, m] of Object.entries(adj)) {
-      if (m.fare) m.fare += (1 - m.fare) * 0.08;
-      if (m.cap) m.cap += (1 - m.cap) * 0.06;
-      if (m.exited && rand(state) < 0.01) {
-        delete m.exited;
-        log(state, `${rivalDef(state, id)?.name} returns to ${k.replace('|', '–')}.`, 'bad', 'rivals');
-      }
-    }
-  }
+  // Reactive behaviour: fare matching and retreat, fleet orders and network
+  // changes, alliances, and drift of market adjustments back to normal.
+  contestTick(state, overlaps);
+  fleetTick(state, typicalTypes);
+  allianceTick(state, activeRivals);
+  driftMarkets(state);
 
   // New entrants on profitable, thinly contested routes.
   for (const rt of state.routes) {
@@ -314,7 +323,7 @@ export function codeshareTerms(state, rivalId) {
   if (rs?.status !== 'active') reasons.push('Airline is not operating');
   if (state.reputation < 45) reasons.push('Your reputation must be at least 45');
   if (rs && rs.hostility > 0.6) reasons.push(`${r.name} sees you as a threat`);
-  if (r && state.hubs.some((h) => r.hubs.includes(h.code)) && r.alliance !== state.partners.alliance && !state.stakes[rivalId]) reasons.push('They will not partner with a carrier hubbed at their own hub');
+  if (r && state.hubs.some((h) => r.hubs.includes(h.code)) && rivalAlliance(state, r) !== state.partners.alliance && !state.stakes[rivalId]) reasons.push('They will not partner with a carrier hubbed at their own hub');
   const score = (rs?.relation ?? 0) / 100 + state.reputation / 200 - (rs?.hostility ?? 0) * 0.5 + (state.stakes[rivalId] ? 0.5 : 0);
   return { reasons, score, fee: 2e6 };
 }
@@ -345,7 +354,7 @@ export function endCodeshare(state, rivalId) {
 export function allianceTerms(state, name) {
   const a = ALLIANCES[name];
   const reasons = [];
-  const formed = { 'Star Alliance': 1997, oneworld: 1999, SkyTeam: 2000 }[name];
+  const formed = ALLIANCE_FOUNDED[name];
   if (yearOf(state.week) < formed) reasons.push(`${name} doesn't exist until ${formed}`);
   if (state.partners.alliance) reasons.push(`Already a member of ${state.partners.alliance}`);
   if (state.reputation < a.minRep) reasons.push(`Reputation ${a.minRep}+ required`);
@@ -359,7 +368,7 @@ export function joinAlliance(state, name) {
   if (state.cash < t.fee) return fail(`Joining costs ${money(t.fee)}`);
   state.cash -= t.fee;
   state.partners.alliance = name;
-  for (const r of activeRivals(state).filter((x) => x.alliance === name)) state.rivals[r.id].hostility = 0;
+  for (const r of activeRivals(state).filter((x) => rivalAlliance(state, x) === name)) state.rivals[r.id].hostility = 0;
   log(state, `${state.airline.name} joins ${name}!`, 'good', 'partners');
   return ok();
 }
@@ -391,7 +400,7 @@ export function acquisitionTerms(state, id) {
 }
 
 // Fleet types a carrier of this kind would plausibly fly in this year.
-function typicalTypes(state, rtype) {
+export function typicalTypes(state, rtype) {
   const year = yearOf(state.week);
   const live = AIRCRAFT.filter((t) => inService(t, year) && year - t.intro >= 1 && t.cat !== 'freighter' && t.cat !== 'sst' && t.cat !== 'commuter');
   const pickCat = (cats) => live.filter((t) => cats.includes(t.cat));
@@ -401,6 +410,7 @@ function typicalTypes(state, rtype) {
 }
 
 export function acquireRival(state, id, payWith = 'cash', { asBrand = false } = {}) {
+  if (state.restructuring?.status === 'active') return fail('Not allowed while in Chapter 11');
   const t = acquisitionTerms(state, id);
   if (t.reasons.length) return fail(t.reasons[0]);
   const r = rivalDef(state, id);
@@ -495,6 +505,7 @@ export function acquireRival(state, id, payWith = 'cash', { asBrand = false } = 
 }
 
 export function buyStake(state, id) {
+  if (state.restructuring?.status === 'active') return fail('Not allowed while in Chapter 11');
   const r = rivalDef(state, id);
   const t = acquisitionTerms(state, id);
   if (state.rivals[id]?.status !== 'active' || r.type === 'cargo') return fail('Not available');

@@ -9,10 +9,13 @@ import { eraFuel, eraRate, eraOf, cpiIndex, histInflation } from '../data/eras.j
 import { PRESETS, makeSettings } from '../data/difficulty.js';
 import { clamp, sum, fail, ok, rand, randNormal, log, money, monthKey, quarterKey, yearOf, weeksInUnit, weekOfYearStart, elapsed, setPriceLevel, dayOfYear } from './core.js';
 import { typeOf, isDelivered, makeAircraft, refreshMarkets, removeAircraft, weeklyFromMonthly, aircraftValue } from './fleet.js';
-import { replenishSlots, stations, newHub, hubWeeklyCost, autoBankTick, terminalTick } from './network.js';
+import { replenishSlots, stations, scheduleChanged, newHub, hubWeeklyCost, autoBankTick, terminalTick } from './network.js';
 import { autoPricing, autoFleet, defaultAutopilot } from './advisor.js';
 import { brandTick, campaignTick, defaultLivery, BRAND_WEEKLY } from './brands.js';
 import { regulationYearly } from './regulation.js';
+import { rivalReactTick } from './rivalai.js';
+import { inChapter11, restructuringTerms, restructuringTick } from './restructuring.js';
+import { newTutorial } from './tutorial.js';
 import { milestoneTick, shareTick, annualReport } from './chronicle.js';
 import { setupScenario, scenarioTick, finalizeScenario, SCENARIOS } from './scenarios.js';
 import { maintenanceTick, facilityUpkeep } from './maintenance.js';
@@ -28,13 +31,16 @@ export const DIFFICULTY = PRESETS;
 
 const zeroCosts = () => ({ checks: 0, recruiting: 0, severance: 0, hedging: 0, incidents: 0, campaigns: 0 });
 
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 6;
+export const HISTORY_WEEKS = 312;
+const round3 = (x) => Math.round(x * 1000) / 1000;
 const zeroCapex = () => ({ aircraft: 0, retrofits: 0, facilities: 0, slots: 0, other: 0 });
 
 export function newGame(opts = {}) {
   const sc = SCENARIOS[opts.scenario];
   if (sc) {
     const state = createGame({ ...sc.airline, ...opts, hub: sc.hub, startYear: sc.year, difficulty: opts.difficulty ?? sc.difficulty });
+    state.tutorial.on = false; // scenarios are for players who know the ropes
     return setupScenario(state, opts.scenario);
   }
   return createGame(opts);
@@ -106,6 +112,8 @@ function createGame({ name = 'Skyward Air', code = 'SK', hub = 'ORD', seed, diff
     milestones: [],
     shareHistory: [],
     scenario: null,
+    restructuring: null,
+    tutorial: newTutorial(true),
   };
   setPriceLevel(state.macro.priceLevel);
   if (model === 'lcc') {
@@ -125,11 +133,21 @@ function createGame({ name = 'Skyward Air', code = 'SK', hub = 'ORD', seed, diff
   return state;
 }
 
+// A new board after a reorganisation: fresh confidence and objectives.
+export function resetBoard(state) {
+  state.board.confidence = 60;
+  state.board.reviews = 0;
+  state.board.lastPrice = sharePrice(state);
+  setObjectives(state);
+  log(state, 'A new board of directors has been appointed and set fresh objectives.', 'info', 'board');
+}
+
 // Bring an older save up to the current state shape.
 export function migrate(state) {
   if (!state || typeof state !== 'object') return null;
   if (state.version === SAVE_VERSION) return state;
-  if (state.version !== 4) return null;
+  if (state.version !== 4 && state.version !== 5) return null;
+  if (state.version === 5) return migrate5to6(state);
   for (const h of state.hubs) {
     if (h.banks == null) {
       h.banks = { 1: 0, 2: 3, 3: 5 }[h.bank] ?? 0;
@@ -151,6 +169,17 @@ export function migrate(state) {
   state.airline.livery ??= defaultLivery(state.airline.color);
   state.settings.regulation ??= 'historical';
   state.weekCosts.campaigns ??= 0;
+  state.version = 5;
+  return migrate5to6(state);
+}
+
+// v6: restructuring, tutorial, settings for bankruptcy protection; trimmed history.
+function migrate5to6(state) {
+  state.restructuring ??= null;
+  state.tutorial ??= newTutorial(false);
+  state.settings.restructuring ??= 'available';
+  while (state.history.length > HISTORY_WEEKS) state.history.shift();
+  for (const ac of state.fleet) if (ac.mxLog?.length > 6) ac.mxLog = ac.mxLog.slice(0, 6);
   state.version = SAVE_VERSION;
   return state;
 }
@@ -212,6 +241,8 @@ function boardReview(state) {
   state.board.confidence = clamp(state.board.confidence + delta, 0, 100);
   state.board.lastPrice = price;
   log(state, `Board review: ${delta >= 0 ? 'satisfied' : 'concerned'}. Quarter profit ${money(qProfit)}, share price ${change >= 0 ? '+' : ''}${(change * 100).toFixed(1)}%. Confidence ${Math.round(state.board.confidence)}.`, delta >= 0 ? 'good' : 'bad', 'board');
+  // Under court protection the board can't fire you.
+  if (inChapter11(state)) state.board.confidence = Math.max(10, state.board.confidence);
   if (state.board.confidence <= 0) {
     state.status = 'fired';
     log(state, 'The board has voted to remove you as CEO.', 'bad', 'board');
@@ -305,6 +336,7 @@ function updateMacro(state) {
 
 export function advanceWeek(state) {
   setPriceLevel(state.macro.priceLevel ?? 1);
+  scheduleChanged(state);
   if (state.status !== 'playing') return fail('The game is over');
   if (state.pendingEvent) return fail('Resolve the current decision first');
   const prevMonth = monthKey(state.week);
@@ -316,6 +348,7 @@ export function advanceWeek(state) {
   timelineTick(state);
   weatherTick(state);
   processDeliveries(state);
+  rivalReactTick(state);
   terminalTick(state);
   autoFleet(state);
   reserveContractHours(state);
@@ -409,7 +442,7 @@ export function advanceWeek(state) {
     s.profit = s.contribution - s.crewCost - s.ownership;
     s.freq = Math.round(s.freq * 10) / 10;
     l.route.last = s;
-    l.route.hist = [...(l.route.hist ?? []), { week: state.week, pax: s.paxTotal, lf: s.lf, revenue: s.totalRevenue, profit: s.profit }].slice(-26);
+    l.route.hist = [...(l.route.hist ?? []), { week: state.week, pax: Math.round(s.paxTotal), lf: round3(s.lf), revenue: Math.round(s.totalRevenue), profit: Math.round(s.profit) }].slice(-26);
   }
 
   // ---- Reputation
@@ -468,11 +501,13 @@ export function advanceWeek(state) {
   };
   state.lastReport = report;
   const cashCost = totalCost - cost.depreciation - cost.tax;
+  // Stored compactly: whole dollars and passengers, ratios to 3 places.
   state.history.push({
-    week: state.week, revenue: totalRevenue, cost: totalCost, profit, pretax: profit + cost.tax, ebitda, cash: state.cash,
-    pax, seats, lf: report.lf, cargoKg, flights, otp, cashCost, sharePrice: 0, co2: routeSum((s) => s.co2 ?? 0),
+    week: state.week, revenue: Math.round(totalRevenue), cost: Math.round(totalCost), profit: Math.round(profit), pretax: Math.round(profit + cost.tax), ebitda: Math.round(ebitda), cash: Math.round(state.cash),
+    pax: Math.round(pax), seats: Math.round(seats), lf: round3(report.lf), cargoKg: Math.round(cargoKg), flights: Math.round(flights), otp: round3(otp), cashCost: Math.round(cashCost), sharePrice: 0, co2: Math.round(routeSum((s) => s.co2 ?? 0)),
   });
-  if (state.history.length > 520) state.history.shift();
+  // Six years of weekly history; annual reports keep the long view.
+  while (state.history.length > HISTORY_WEEKS) state.history.shift();
   const mk = monthKey(state.week);
   const m = (state.months[mk] ??= { revenue: 0, cost: 0, profit: 0, pax: 0, cargoKg: 0, flights: 0, weeks: 0 });
   m.revenue += totalRevenue;
@@ -517,12 +552,18 @@ export function advanceWeek(state) {
   state.history[state.history.length - 1].sharePrice = price;
   report.sharePrice = price;
 
-  // ---- Solvency
-  state.lowCashWeeks = state.cash < 0 ? state.lowCashWeeks + 1 : 0;
+  // ---- Solvency (with optional Chapter 11 protection)
+  restructuringTick(state, resetBoard);
+  state.lowCashWeeks = state.cash < 0 && !inChapter11(state) ? state.lowCashWeeks + 1 : 0;
   if (state.lowCashWeeks === 1) log(state, 'Cash is negative! Raise money within 8 weeks or face administration.', 'bad', 'finance');
-  if (state.lowCashWeeks >= 8) {
-    state.status = 'bankrupt';
-    log(state, `${state.airline.name} has entered administration.`, 'bad');
+  if (state.lowCashWeeks >= 8 && state.status === 'playing') {
+    const t = restructuringTerms(state);
+    if (!t.reasons.filter((r) => !r.startsWith('Only a distressed')).length) {
+      if (!state.pendingEvent) triggerEvent(state, 'insolvency', null, true);
+    } else {
+      state.status = 'bankrupt';
+      log(state, `${state.airline.name} has entered administration.`, 'bad');
+    }
   }
   if (state.status !== 'playing') {
     finalizeScenario(state);
@@ -536,6 +577,7 @@ export function advanceWeek(state) {
   state.ledgerCapex = zeroCapex();
 
   // ---- Decisions
+  if (state.pendingEvent) return ok({ report });
   const queued = state.queue.shift();
   if (queued) triggerEvent(state, queued.event, queued.data, true);
   else if (elapsed(state) > 3 && rand(state) < 0.1 * (state.settings?.events ?? 1)) triggerEvent(state);

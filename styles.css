@@ -299,3 +299,31 @@ tbody tr:hover td { background: color-mix(in srgb, var(--panel-2) 50%, transpare
   .livery-editor { grid-template-columns: 1fr; }
   .timeline .when { min-width: 80px; }
 }
+.panel.ch11 { border-color: var(--bad); }
+.modal.wide { max-width: 720px; }
+table.slots { width: 100%; border-collapse: collapse; }
+table.slots td { padding: 6px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+table.slots tr.current { background: var(--panel-2); }
+table.slots .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; }
+
+/* ---- Tooltips & tutorial ---- */
+.tip { border-bottom: 1px dotted currentColor; cursor: help; position: relative; outline: none; }
+.tip:hover::after, .tip:focus::after {
+  content: attr(data-tip); position: absolute; left: 0; top: calc(100% + 6px); z-index: 50; width: max-content; max-width: 260px;
+  white-space: normal; text-transform: none; letter-spacing: 0; font-weight: 400; font-size: 12px; line-height: 1.4;
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; box-shadow: 0 6px 20px rgba(0,0,0,.25);
+}
+.topbar .tip:hover::after, .topbar .tip:focus::after { left: -40px; }
+.tutorial {
+  position: fixed; right: 16px; bottom: 16px; z-index: 40; width: 340px; max-width: calc(100vw - 32px);
+  background: var(--panel); border: 1px solid var(--accent); border-radius: 12px; padding: 12px 14px; box-shadow: 0 10px 30px rgba(0,0,0,.3);
+}
+.tutorial h3 { margin: 6px 0 4px; }
+.tutorial p { margin: 0 0 8px; font-size: 13px; }
+.tut-head { display: flex; justify-content: space-between; align-items: center; }
+.tut-bar { height: 4px; background: var(--panel-2); border-radius: 2px; overflow: hidden; }
+.tut-bar span { display: block; height: 100%; background: var(--accent); }
+.tut-steps { margin: 8px 0 0; padding-left: 20px; font-size: 12px; }
+.tut-steps li.done a { color: var(--good); text-decoration: line-through; }
+.tut-steps li.now a { font-weight: 700; }
+@media (max-width: 700px) { .tutorial { left: 16px; right: 16px; width: auto; bottom: 8px; } }

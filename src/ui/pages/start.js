@@ -1,5 +1,5 @@
 import { G, esc, money, options, liverySvg } from '../util.js';
-import { savedGame, formValues } from '../app.js';
+import { saves, slotTable, formValues } from '../app.js';
 
 const COLORS = ['#4da3ff', '#e5484d', '#30a46c', '#f5a524', '#8e4ec6', '#12a594', '#e93d82', '#ffffff'];
 
@@ -57,7 +57,7 @@ export function render(ctx) {
   const year = sc ? sc.year : s.year;
   const inflation = startSettings(s).inflation !== 'off';
   G.setPriceLevel(inflation ? G.cpiIndex(year) : 1);
-  const saved = savedGame();
+  const slots = saves.list();
   const hubs = G.AIRPORTS.filter((a) => a.region === s.region && a.runway >= 2400).sort((a, b) => b.pop - a.pop);
   const hub = G.airportByCode[s.hub];
   const rivalsAtHub = G.RIVALS.filter((r) => r.hubs.includes(s.hub) && r.founded <= s.year && (r.ceased ?? 9999) > s.year);
@@ -90,7 +90,7 @@ export function render(ctx) {
   return `<div class="start"><div class="start-card panel" data-form>
     <h1>✈ Airline Executive Simulator</h1>
     <p class="muted">You are the CEO. Plan a network, build a fleet with real lead times, run engineering, crew and finance, and fight real-world rivals — all while the board watches every quarter. Automation (pricing, aircraft assignment, staffing, maintenance) is on by default; take the controls when you want to.</p>
-    ${saved ? `<button class="primary wide" data-action="continue">Continue ${esc(saved.airline.name)} — ${G.dateLabel(saved.week)}</button><hr>` : ''}
+    ${slots.length ? `<div class="field"><label>Saved games</label>${slotTable(slots, { inGame: false })}<label class="button-like small">Import save file<input type="file" accept=".json" data-change="import-save" hidden></label></div><hr>` : '<label class="button-like small">Import a save file<input type="file" accept=".json" data-change="import-save" hidden></label>'}
     ${modePicker(s)}
     ${identity}
     ${sc ? scenario : freePlay}
@@ -136,16 +136,15 @@ export const actions = {
     keep(ctx, el);
     const s = st(ctx);
     const code = (s.code || 'XX').toUpperCase().replace(/[^A-Z0-9]/g, '').padEnd(2, 'X').slice(0, 2);
+    ctx.slot = null;
+    ctx.snapshot = null;
     ctx.game = G.newGame({
       name: s.name.trim() || 'Skyward Air', code, hub: s.hub, difficulty: s.difficulty, settings: s.overrides ?? {}, color: s.color, startYear: s.year,
       model: s.model, livery: { pattern: s.pattern, logo: s.logo, color2: '#ffffff' }, scenario: s.scenario || undefined,
     });
     location.hash = '#dashboard';
   },
-  continue(el, ctx) {
-    ctx.game = savedGame();
-    location.hash = '#dashboard';
-  },
+
 };
 
 export { options };
