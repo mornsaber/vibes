@@ -695,7 +695,10 @@ test('subsidiary brands have their own reputation, fares and costs', () => {
   run(s, 3);
   const lcc = route.last;
   assert.ok(lcc.cost.distribution / lcc.ticket < main.cost.distribution / main.ticket, 'direct sales');
-  assert.ok(lcc.crewFactor < 1);
+  assert.equal(lcc.crewFactor, 1, 'the pilots’ scope clause keeps the LCC on the mainline contract');
+  assert.ok(G.buyScopeRelief(s, 'lcc').ok);
+  run(s, 1);
+  assert.ok(route.last.crewFactor < 1, 'its own cheaper contract after scope relief');
   assert.ok(lcc.ancillary / lcc.paxTotal > main.ancillary / main.paxTotal, 'paid extras');
   const results = G.brandResults(s);
   assert.equal(results.length, 2);
@@ -1404,4 +1407,230 @@ test('the cabin a refit is installing is visible while the aircraft is in the sh
   run(s, 3);
   assert.equal(G.pendingCabin(s, ac), null);
   assert.equal(G.seatCount(ac.config), G.seatCount(p.config));
+});
+
+// ---------------------------------------------------------------------------
+// Joint ventures and the loyalty programme.
+
+function jvSetup() {
+  const s = setup({ hub: 'JFK', seed: 101 });
+  manual(s);
+  for (const to of ['CDG', 'FRA', 'MAD']) G.openRoute(s, 'JFK', to);
+  for (const r of s.routes) G.setFrequency(s, quickLease(s, 'b789').id, r.id, 7, { autoSlots: true });
+  const partner = G.activeRivals(s).find((r) => r.hubs[0] === 'CDG').id;
+  s.partners.codeshares.push(partner);
+  s.reputation = 70;
+  run(s, 2);
+  return { s, partner };
+}
+
+test('a joint venture needs a partner, open skies and a regulator', () => {
+  const { s, partner } = jvSetup();
+  const t = G.jvTerms(s, partner);
+  assert.deepEqual(t.regions, ['NA', 'EU']);
+  assert.deepEqual(t.reasons, []);
+  const loner = G.activeRivals(s).find((r) => G.airportByCode[r.hubs[0]].region === 'EU' && r.type !== 'lcc' && !s.partners.codeshares.includes(r.id) && r.id !== partner);
+  assert.match(G.jvTerms(s, loner.id).reasons.join(), /codeshare/);
+  assert.ok(G.proposeJV(s, partner).ok);
+  assert.equal(s.jvs[0].status, 'review');
+  assert.equal(G.jvFor(s, 'JFK', 'CDG'), null, 'nothing changes until approval');
+  s.jvs[0].decision = s.week + 1;
+  run(s, 2);
+  assert.ok(['active', 'ended'].includes(s.jvs[0].status));
+});
+
+test('an active joint venture removes the partner as a rival and shares revenue', () => {
+  const { s, partner } = jvSetup();
+  assert.ok(G.proposeJV(s, partner).ok);
+  const jv = s.jvs[0];
+  jv.status = 'active';
+  jv.approved = s.week;
+  const biz = (G.airportByCode.JFK.biz + G.airportByCode.CDG.biz) / 2;
+  const entry = G.rivalsOn(s, 'JFK', 'CDG', G.rivalsContext(s, { memo: false })).find((r) => r.id === partner);
+  assert.ok(entry.jv < 1, 'partner coordinates instead of competing');
+  assert.ok(G.rivalAppeal(s, entry, 'Y', biz) < G.rivalAppeal(s, { ...entry, jv: 1 }, 'Y', biz));
+  assert.equal(G.jvBoost(s, 'JFK', 'CDG'), 1.12);
+  assert.equal(G.jvBoost(s, 'JFK', 'BOS'), 1, 'domestic routes are outside the venture');
+  run(s, 3);
+  assert.ok(Number.isFinite(jv.last) && Math.abs(jv.last) <= 0.3 * s.routes.reduce((a, r) => a + (r.last?.totalRevenue ?? 0), 0) + 1);
+  assert.ok('jv' in s.lastReport.revenue);
+  // Leaving the codeshare dissolves it.
+  G.endCodeshare(s, partner);
+  run(s, 1);
+  assert.equal(jv.status, 'ended');
+});
+
+test('frequent flyers accrue miles, banks buy them and miles can be pre-sold', () => {
+  const s = setup();
+  manual(s);
+  for (const to of ['LAX', 'SEA']) {
+    const { route } = G.openRoute(s, 'DEN', to);
+    G.assignAircraft(s, quickLease(s, 'a320n').id, route.id);
+  }
+  run(s, 4);
+  assert.ok(s.loyalty.members > 0 && s.loyalty.miles > 0);
+  assert.ok(s.lastReport.cost.loyalty > 0, 'redemptions cost money');
+  assert.match(G.bankOffer(s).reasons.join(), /150,000 members/);
+  s.loyalty.members = 400e3;
+  const o = G.bankOffer(s);
+  assert.deepEqual(o.reasons, []);
+  const cash = s.cash;
+  assert.ok(G.signBankDeal(s).ok);
+  assert.ok(Math.abs(s.cash - cash - o.bonus) < 1, 'signing bonus');
+  run(s, 1);
+  assert.ok(s.lastReport.revenue.loyalty > 0, 'the bank buys miles each week');
+  const before = s.cash;
+  assert.ok(G.presellMiles(s, 52).ok);
+  assert.ok(s.cash > before);
+  run(s, 1);
+  assert.equal(s.lastReport.revenue.loyalty, 0, 'pre-sold weeks bring no new cash');
+  assert.equal(G.presellMiles(s, 52).ok, false, 'one pre-sale at a time');
+  // No programme before 1981.
+  const old = setup({ startYear: 1975 });
+  assert.equal(G.loyaltyOn(old), false);
+});
+
+// ---------------------------------------------------------------------------
+// Manufacturer deals.
+
+test('launch customers get better terms on a programme that may slip', () => {
+  const s = setup();
+  s.cash = 3e9;
+  const t = G.launchTerms(s, 'b778');
+  assert.deepEqual(t.reasons, []);
+  assert.equal(G.orderAircraft(s, 'b778', 2, null, null, { launch: true }).ok, false, 'minimum order');
+  assert.ok(G.launchTerms(s, 'a320n').reasons.length, 'only for types not yet flying');
+  const cash = s.cash;
+  assert.ok(G.orderAircraft(s, 'b778', 5, null, null, { launch: true }).ok);
+  const o = s.orders[0];
+  assert.ok(o.launch && o.price < G.aircraftById.b778.price * 0.8);
+  assert.ok(Math.abs(cash - s.cash - o.price * 0.1 * 5) < 1, '10% deposits');
+  assert.ok(o.deliveryWeek <= G.weekOfYearStart(2030) + 9, 'first in line at entry into service');
+  const p = s.programmes.b778;
+  assert.ok(p && p.announced === false);
+  // Force a delay and reveal it.
+  p.delay = 52;
+  const due = o.deliveryWeek;
+  s.week = G.weekOfYearStart(2030) - 50;
+  const credit = G.oemTick(s, false);
+  assert.equal(o.deliveryWeek, due + 52);
+  assert.ok(credit > 0, 'compensation');
+});
+
+test('a fleet grounding stops flying, freezes deliveries and pays compensation', () => {
+  const s = setup();
+  manual(s);
+  const { route } = G.openRoute(s, 'DEN', 'LAX');
+  const ac = quickLease(s, 'b38m');
+  G.setFrequency(s, ac.id, route.id, 14);
+  s.cash = 1e9;
+  assert.ok(G.orderAircraft(s, 'b38m', 1).ok);
+  run(s, 1);
+  G.groundTypes(s, ['b38m', 'b3xm'], 10, 'Test grounding');
+  assert.ok(s.orders[0].deliveryWeek >= s.week + 10, 'deliveries frozen');
+  run(s, 1);
+  assert.equal(route.last.flights, 0);
+  assert.equal(G.statusOf(s, ac).key, 'grounded');
+  assert.ok(s.lastReport.revenue.oem > 0);
+  run(s, 10);
+  assert.ok(route.last.flights > 0, 'back in the air');
+});
+
+test('engine choice changes fuel burn and maintenance, and mixing engines costs spares', () => {
+  const s = setup();
+  const leap = G.makeAircraft(s, 'a320n', { engine: 'leap1a' });
+  const gtf = G.makeAircraft(s, 'a320n', { engine: 'gtf' });
+  assert.equal(G.engineOf(gtf).name.includes('GTF'), true);
+  assert.ok(G.fuelFactor(s, gtf) < G.fuelFactor(s, leap));
+  const fam = G.familyOf('a320n');
+  assert.ok(G.commonality(s).mx[fam] > G.familyMxFactor(2), 'two engine makes in one family');
+  assert.equal(G.makeAircraft(s, 'b738').engine, undefined, 'single-engine types have no choice');
+  s.cash = 1e9;
+  assert.ok(G.orderAircraft(s, 'a321n', 1, null, null, { engine: 'gtf' }).ok);
+  assert.equal(s.orders.at(-1).engine, 'gtf');
+});
+
+// ---------------------------------------------------------------------------
+// Crew bases, seniority and scope clauses.
+
+test('routes are crewed from the cheaper base, and remote routes need positioning', () => {
+  const s = setup({ hub: 'FRA' });
+  manual(s);
+  G.openRoute(s, 'FRA', 'MAD');
+  const madBcn = G.openRoute(s, 'MAD', 'BCN').route;
+  assert.equal(G.routeBase(s, madBcn).remote, true);
+  const t = G.crewBaseTerms(s, 'MAD');
+  assert.deepEqual(t.reasons, []);
+  assert.ok(G.openCrewBase(s, 'MAD').ok);
+  assert.equal(G.routeBase(s, madBcn).remote, false);
+  assert.equal(G.routeBase(s, madBcn).code, 'MAD');
+  assert.ok(G.closeCrewBase(s, 'MAD').ok);
+  assert.equal(G.closeCrewBase(s, 'LHR').ok, false, 'hubs are always bases');
+  // Positioned crews cost more and need more crew hours.
+  const ac = quickLease(s, 'a320n');
+  G.setFrequency(s, ac.id, madBcn.id, 14);
+  run(s, 1);
+  assert.ok(madBcn.last.cost.crewTravel > 0);
+});
+
+test('a cheaper foreign base saves crew pay but upsets the pilots’ union', () => {
+  const s = setup({ hub: 'JFK' });
+  manual(s);
+  const { route } = G.openRoute(s, 'JFK', 'GRU');
+  const t = G.crewBaseTerms(s, 'GRU');
+  assert.deepEqual(t.reasons, []);
+  assert.ok(t.wage < 0.9 && t.objection);
+  const morale = s.staff.pilots.morale;
+  assert.ok(G.openCrewBase(s, 'GRU').ok);
+  assert.ok(s.staff.pilots.morale < morale);
+  assert.ok(G.routeBase(s, route).wage < 1);
+});
+
+test('furloughs go by reverse seniority and furloughed crew can be recalled', () => {
+  const s = setup();
+  const w = s.staff.pilots;
+  const juniors = w.grades[0];
+  const seniors = w.grades[2];
+  assert.ok(G.furlough(s, 'pilots', 3).ok);
+  assert.equal(w.grades[2], seniors, 'senior crew stay');
+  assert.ok(w.grades[0] <= juniors);
+  assert.equal(w.furloughed, 3);
+  const res = G.recall(s, 'pilots', 3);
+  assert.ok(res.ok);
+  assert.equal(w.furloughed, 0);
+  assert.ok(w.pipeline.some((p) => p.n === 3));
+});
+
+test('scope clauses limit subsidiaries until relief is bought', () => {
+  const s = setup();
+  manual(s);
+  const b = G.launchBrand(s, { name: 'Feeder', code: 'FD', kind: 'regional' }).brand;
+  const { route } = G.openRoute(s, 'DEN', 'SLC');
+  G.setRouteBrand(s, route.id, b.id);
+  G.assignAircraft(s, quickLease(s, 'a320n').id, route.id);
+  run(s, 1);
+  const st = G.scopeStatus(s);
+  assert.ok(st.violations.some((v) => /76 seats/.test(v)));
+  s.staff.pilots.morale = 70;
+  const pay = s.staff.pilots.pay;
+  assert.ok(G.buyScopeRelief(s, 'regional').ok);
+  assert.ok(s.staff.pilots.pay > pay);
+  assert.equal(s.scope.regionalSeats, 100);
+  s.staff.pilots.union.recognized = false;
+  assert.equal(G.scopeStatus(s).applies, false, 'no union, no scope');
+});
+
+test('version 7 saves migrate to version 8 and keep existing low-cost brands on their own contract', () => {
+  const s = setup();
+  G.launchBrand(s, { name: 'Zoom', code: 'ZM', kind: 'lcc' });
+  run(s, 1);
+  const old = JSON.parse(JSON.stringify(s));
+  old.version = 7;
+  for (const k of ['jvs', 'loyalty', 'programmes', 'groundings', 'crewBases', 'scope', 'crewIntegration']) delete old[k];
+  const m = G.migrate(old);
+  assert.equal(m.version, G.SAVE_VERSION);
+  assert.deepEqual(m.jvs, []);
+  assert.equal(m.scope.lccSeparate, true, 'grandfathered');
+  run(m, 2);
+  assert.equal(m.status, 'playing');
 });

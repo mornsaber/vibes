@@ -5,10 +5,10 @@ const COST_LABELS = {
   fuel: 'Fuel', pilots: 'Pilots', cabin: 'Cabin crew', engineers: 'Engineers', ground: 'Ground staff', admin: 'Head office',
   maintenance: 'Maintenance & checks', airport: 'Airport charges & handling', navigation: 'Navigation charges', service: 'Onboard service',
   distribution: 'Distribution & codeshare', disruption: 'Delays & crew travel', leases: 'Aircraft leases', marketing: 'Marketing & campaigns',
-  carbon: 'Carbon allowances & SAF', facilities: 'Hubs, terminals & facilities', overhead: 'Overhead (IT, insurance, recruiting)', sga: 'Sales, general & admin', contracts: 'Contract & venture costs',
+  carbon: 'Carbon allowances & SAF', loyalty: 'Loyalty redemptions', facilities: 'Hubs, terminals & facilities', overhead: 'Overhead (IT, insurance, recruiting)', sga: 'Sales, general & admin', contracts: 'Contract & venture costs',
   interest: 'Interest', depreciation: 'Depreciation', tax: 'Corporate tax',
 };
-const REV_LABELS = { interest: 'Interest on cash', passenger: 'Passenger tickets', ancillary: 'Ancillaries', cargo: 'Cargo', contracts: 'Charter & special contracts', subsidies: 'Government subsidies', ventures: 'Ventures' };
+const REV_LABELS = { interest: 'Interest on cash', passenger: 'Passenger tickets', ancillary: 'Ancillaries', cargo: 'Cargo', contracts: 'Charter & special contracts', subsidies: 'Government subsidies', ventures: 'Ventures', jv: 'Joint-venture settlement', loyalty: 'Miles sold to banks' };
 
 export function render(c) {
   const s = c.state;

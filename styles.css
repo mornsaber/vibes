@@ -383,3 +383,8 @@ td.wrap { white-space: normal; min-width: 180px; }
   .nav-item { padding: 10px 10px; }
   .tip { -webkit-tap-highlight-color: transparent; }
 }
+
+/* Compact KPI values (names rather than numbers) and tight stacks in tables */
+.kpi div.small-value { font-family: inherit; font-size: 15px; font-weight: 600; }
+.stack.tight { gap: 4px; }
+.stack.tight select { width: 100%; max-width: 190px; font-size: 12px; text-overflow: ellipsis; }

@@ -17,6 +17,7 @@ export const HISTORY = [
   { year: 2010, month: 4, id: 'volcano', p: 0.6, jitter: 24 },
   { year: 2011, month: 3, id: 'tsunami', p: 0.5, jitter: 24 },
   { year: 2014, month: 7, id: 'airspace_east', p: 0.5, jitter: 24 },
+  { year: 2019, month: 3, id: 'max_grounding', p: 0.75, jitter: 10 },
   { year: 2020, month: 3, id: 'pandemic', p: 0.7, jitter: 18 },
   { year: 2022, month: 2, id: 'airspace_russia', p: 0.7, jitter: 18 },
 ];

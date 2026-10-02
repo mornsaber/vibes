@@ -5,12 +5,12 @@ import { settingsEditor, parseSetting } from './start.js';
 import { render as cargoRender } from './cargo.js';
 
 // Hubs and cargo have their own pages; old links to them still work.
-const TABS = [['airline', 'Airline'], ['autopilot', 'Autopilot'], ['staffing', 'Staffing'], ['service', 'Service & marketing'], ['brands', 'Brands & campaigns'], ['codeshare', 'Partners'], ['subsidies', 'Subsidies'], ['stats', 'Statistics']];
+const TABS = [['airline', 'Airline'], ['autopilot', 'Autopilot'], ['staffing', 'Staffing'], ['service', 'Service & marketing'], ['loyalty', 'Loyalty'], ['brands', 'Brands & campaigns'], ['codeshare', 'Partners'], ['subsidies', 'Subsidies'], ['stats', 'Statistics']];
 
 export function render(c) {
   let tab = c.params[0] ?? 'airline';
   if (tab === 'branding') tab = 'brands';
-  const body = { airline, autopilot, brands: (x) => brands(x) + branding(x), subsidies, stats, hubs: (x) => hubsPanel(x.state), service, codeshare, staffing, cargo: (x) => cargoRender({ ...x, params: ['overview'] }, true) }[tab] ?? airline;
+  const body = { airline, autopilot, brands: (x) => brands(x) + branding(x), subsidies, stats, hubs: (x) => hubsPanel(x.state), service, loyalty, codeshare, staffing, cargo: (x) => cargoRender({ ...x, params: ['overview'] }, true) }[tab] ?? airline;
   return `<div class="page-head"><h1>Management</h1></div>${tabs('management', TABS, tab)}${body(c)}`;
 }
 
@@ -246,12 +246,79 @@ function codeshare(c) {
     { h: 'Hostility', v: (p) => bar(s.rivals[p.r.id].hostility * 100, 100, { invert: true }) },
     { h: '', v: (p) => (p.t.reasons.length ? `<small class="muted">${esc(p.t.reasons[0])}</small>` : `<button class="small" data-action="propose-codeshare" data-id="${p.r.id}">Propose (${money(p.t.fee)})</button>`) },
   ]))}
+  ${jointVentures(s)}
   ${panel('Global alliances', table(Object.entries(G.ALLIANCES), [
     { h: 'Alliance', v: ([n]) => `<b>${esc(n)}</b>${s.partners.alliance === n ? ` ${pill('Member', 'good')}` : ''}` },
     { h: 'Members', v: ([n]) => `<small>${G.RIVALS.filter((r) => r.alliance === n).map((r) => r.code).join(' ')}</small>` },
     { h: 'Requirements', v: ([, a]) => `Rep ${a.minRep}+, ${a.minFleet}+ aircraft, ${money(a.fee)}` },
     { h: '', v: ([n]) => (s.partners.alliance === n ? '<button class="small danger" data-action="leave-alliance">Leave</button>' : (() => { const t = G.allianceTerms(s, n); return t.reasons.length ? `<small class="muted">${esc(t.reasons[0])}</small>` : `<button class="small primary" data-action="join-alliance" data-name="${esc(n)}">Join</button>`; })()) },
   ]))}`;
+}
+
+const REGION_NAME = (r) => G.REGIONS[r]?.name ?? r;
+
+function jointVentures(s) {
+  const jvs = (s.jvs ?? []).filter((j) => j.status !== 'ended');
+  const ids = new Set([...s.partners.codeshares, ...(s.partners.alliance ? G.activeRivals(s).filter((r) => G.rivalAlliance(s, r) === s.partners.alliance).map((r) => r.id) : [])]);
+  const candidates = [...ids].filter((id) => !jvs.some((j) => j.partner === id)).map((id) => G.jvTerms(s, id)).filter((t) => t.name && t.regions[1] !== t.regions[0]);
+  const status = (j) => (j.status === 'review' ? pill(`Regulator rules in ${j.decision - s.week} wk`, 'warn') : pill('Active', 'good'));
+  return panel('Joint ventures', `${table(jvs, [
+    { h: 'Partner', v: (j) => `<a href="#competitors/${j.partner}">${esc(G.rivalDef(s, j.partner)?.name ?? j.partner)}</a>` },
+    { h: 'Market', v: (j) => `${REGION_NAME(j.regions[0])} – ${REGION_NAME(j.regions[1])}` },
+    { h: 'Status', v: status },
+    { h: 'Your share', cls: 'num', v: (j) => pct(j.share) },
+    { h: 'Settlement last week', cls: 'num', v: (j) => (j.status === 'active' ? signed(j.last ?? 0) : '–') },
+    { h: 'To date', cls: 'num', v: (j) => signed(j.settled ?? 0) },
+    { h: '', v: (j) => `<button class="small danger" data-action="end-jv" data-id="${j.id}">End</button>` },
+  ], { empty: 'No joint ventures.' })}
+  ${candidates.length ? `<h3>Possible joint ventures</h3>${table(candidates, [
+    { h: 'Partner', v: (t) => `<a href="#competitors/${t.partner}">${esc(t.name)}</a>` },
+    { h: 'Market', v: (t) => `${REGION_NAME(t.regions[0])} – ${REGION_NAME(t.regions[1])}` },
+    { h: 'Your weekly flights there', cls: 'num', v: (t) => num(t.stats.freq, 1) },
+    { h: 'Your starting share', cls: 'num', v: (t) => pct(t.share) },
+    { h: '', v: (t) => (t.reasons.length ? `<small class="muted">${esc(t.reasons[0])}</small>` : `<button class="small primary" data-action="propose-jv" data-id="${t.partner}">Sign (${money(t.fee)})</button>`) },
+  ])}` : '<p class="muted small">Partner with an airline based in another region (codeshare or alliance) to explore a joint venture.</p>'}
+  <p class="muted small">From ${G.JV_FIRST_YEAR}, partners with antitrust immunity can pool revenue on long-haul routes (over ${int(G.JV_MIN_DISTANCE)} km) between their regions. The partner stops competing with you there and joint sales lift demand by 12%. Revenue is pooled and split by each side's share of capacity, re-set every year: capacity you add between re-sets is shared with the partner, and if your revenue slumps, the partner's steadier revenue cushions you. Needs open skies and a ${G.JV_REVIEW_WEEKS}-week regulatory review.</p>`);
+}
+
+function loyalty(c) {
+  const s = c.state;
+  const L = s.loyalty;
+  const year = G.yearOf(s.week);
+  if (year < G.LOYALTY_FIRST_YEAR) return panel('Loyalty programme', `<p>Frequent flyer programmes arrive in ${G.LOYALTY_FIRST_YEAR}. Until then, the loyalty service level stands for repeat-customer perks.</p>`);
+  if (!G.loyaltyOn(s)) return panel('Loyalty programme', `<p>No frequent flyer programme. Raise the loyalty service level to 2 or more (Service & marketing) to launch one.</p>`);
+  const o = G.bankOffer(s);
+  const lv = s.service.loyalty;
+  return `<div class="grid kpis">
+    ${kpi('Members', int(L?.members ?? 0))}
+    ${kpi('Miles outstanding', `${num((L?.miles ?? 0) / 1e6, 0)}M`, { sub: `liability ${money(G.loyaltyLiability(s))}` })}
+    ${kpi('Redemptions / wk', money(s.lastReport?.cost?.loyalty ?? 0))}
+    ${kpi('Card income / wk', money(L?.lastCard ?? 0), { sub: L?.presold ? `${L.presold} wk pre-sold` : '' })}
+    ${kpi('Demand effect', `+${pct(G.loyaltyBoost(s) - 1, 1)}`, { sub: 'flexible travellers' })}
+  </div>
+  <div class="grid cols-2">
+    ${panel('Programme', `${statement([
+      ['Programme level', `${lv} of 5 <a href="#management/service" class="small">change</a>`],
+      ['Miles issued last week', `${num((L?.lastIssued ?? 0) / 1e6, 1)}M`],
+      ['Miles redeemed last week', `${num((L?.lastRedeemed ?? 0) / 1e6, 1)}M`],
+      ['Cost per redeemed mile', `${(G.MILE_COST * 100).toFixed(1)}¢`],
+    ])}<p class="muted small">Members earn miles as they fly (more at higher programme levels) and make flexible travellers more likely to book you. Redeemed miles cost money; unused ones slowly expire. The liability is what the outstanding miles would cost to honour.</p>`)}
+    ${panel('Co-brand credit card', L?.bank ? `${statement([
+      ['Bank', esc(L.bank.name)],
+      ['Price per mile', `${(L.bank.price * 100).toFixed(2)}¢`],
+      ['Miles bought per week', `≈ ${money(G.cardWeekly(s))}`],
+      ['Deal ends', G.dateLabel(L.bank.until)],
+      ['Pre-sold', L.presold ? `${L.presold} weeks` : 'None'],
+    ])}<div class="row"><button data-action="presell-miles" ${L.presold ? 'disabled' : ''}>Pre-sell a year of miles (${money(G.cardWeekly(s) * Math.min(52, L.bank.until - s.week) * (1 - G.PRESALE_DISCOUNT))})</button></div>
+    <p class="muted small">Pre-selling raises cash now at a ${pct(G.PRESALE_DISCOUNT)} discount; the bank then pays nothing for those weeks. Airlines did this in 2008 and 2020.</p>` : `${o.reasons.length ? `<p class="muted">${esc(o.reasons[0])}</p>` : `${statement([
+      ['Bank', esc(o.name)],
+      ['Price per mile', `${(o.price * 100).toFixed(2)}¢`],
+      ['Expected purchases', `${money(o.weekly)} a week`],
+      ['Signing bonus', money(o.bonus)],
+      ['Term', `${o.years} years`],
+    ])}<button class="primary" data-action="sign-bank">Sign the card deal</button>`}
+    <p class="muted small">Banks buy miles to reward card spending (from ${G.COBRAND_FIRST_YEAR}). Card miles join the liability, but sell for more than they cost to redeem — for many airlines this is the most profitable business they have.</p>`)}
+  </div>`;
 }
 
 function staffing(c) {
@@ -358,6 +425,10 @@ export const actions = {
     ctx.game.marketing = Math.max(0, Math.min(10e6, Math.round(fromNominal(formValues(el).marketing) || 0)));
   },
   'propose-codeshare': (el, ctx) => G.proposeCodeshare(ctx.game, el.dataset.id),
+  'propose-jv': (el, ctx) => G.proposeJV(ctx.game, el.dataset.id),
+  'end-jv': (el, ctx) => (confirm('Walk away from this joint venture? The partner will not take it well.') ? G.endJV(ctx.game, el.dataset.id) : null),
+  'sign-bank': (el, ctx) => G.signBankDeal(ctx.game),
+  'presell-miles': (el, ctx) => (confirm('Pre-sell a year of card miles at a discount?') ? G.presellMiles(ctx.game, 52) : null),
   'end-codeshare': (el, ctx) => (confirm('End this codeshare?') ? G.endCodeshare(ctx.game, el.dataset.id) : null),
   'join-alliance': (el, ctx) => G.joinAlliance(ctx.game, el.dataset.name),
   'leave-alliance': (el, ctx) => (confirm('Leave the alliance?') ? G.leaveAlliance(ctx.game) : null),

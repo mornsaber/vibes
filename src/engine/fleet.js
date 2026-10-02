@@ -1,7 +1,8 @@
 // Fleet: acquiring aircraft (factory orders, operating leases, used market),
 // valuation, cabin configuration, retrofits, upgrades and freighter conversions.
 
-import { AIRCRAFT, aircraftById, cabinUnits, seatCount, CLASSES, CHECKS, UPGRADES, CONVERSIONS, inProduction, inService, SEAT_PRODUCTS, seatProducts, defaultCabin, canCombi, cabinGroup, familyOf } from '../data/aircraft.js';
+import { launchTerms, ensureProgramme, activeGrounding, LAUNCH_DISCOUNT, LAUNCH_DEPOSIT } from './oem.js';
+import { AIRCRAFT, aircraftById, cabinUnits, seatCount, CLASSES, CHECKS, UPGRADES, CONVERSIONS, inProduction, inService, SEAT_PRODUCTS, seatProducts, defaultCabin, canCombi, cabinGroup, familyOf, engineOptions, engineOf } from '../data/aircraft.js';
 import { clamp, fail, ok, rand, randInt, pick, weightedPick, newId, log, money, sum, yearOf, weekOfYearStart } from './core.js';
 import { setSchedule } from './network.js';
 
@@ -18,6 +19,8 @@ export function isOperational(state, ac) {
 export function statusOf(state, ac) {
   if (!isDelivered(state, ac)) return { key: 'delivery', label: `Arrives in ${ac.deliveryWeek - state.week} wk`, tone: 'warn' };
   if (ac.grounded) return { key: 'grounded', label: ac.grounded, tone: 'bad' };
+  const tg = state.typeRestrictions?.[ac.type];
+  if (tg?.factor === 0) return { key: 'grounded', label: tg.reason ? `Grounded: ${tg.reason}` : 'Grounded by regulators', tone: 'bad' };
   if (inDowntime(state, ac)) return { key: 'shop', label: ac.downtime.label, tone: 'warn' };
   if (ac.contractFull) return { key: 'contract', label: 'On contract', tone: 'info' };
   if (!ac.schedule.length && !ac.contractHours) return { key: 'idle', label: 'Idle', tone: 'bad' };
@@ -36,8 +39,11 @@ function registration(state) {
 
 // Create an aircraft record. `ageWeeks` > 0 makes a used airframe with a
 // plausible maintenance history.
-export function makeAircraft(state, typeId, { owned = true, lease = null, ageWeeks = 0, deliveryWeek = state.week, config, cabin, reliability, price } = {}) {
+export function makeAircraft(state, typeId, { owned = true, lease = null, ageWeeks = 0, deliveryWeek = state.week, config, cabin, reliability, price, engine } = {}) {
   const type = aircraftById[typeId];
+  // Leased and second-hand airframes come with whatever engines they were built with.
+  const engines = engineOptions(typeId);
+  if (engines.length && !engines.some((e) => e.id === engine)) engine = engines[state.fleetSerial % engines.length].id;
   const builtWeek = deliveryWeek - ageWeeks;
   const fh = Math.round(ageWeeks * (type.cat === 'wide' || type.cat === 'jumbo' ? 85 : 65));
   const checks = {};
@@ -61,6 +67,7 @@ export function makeAircraft(state, typeId, { owned = true, lease = null, ageWee
     builtWeek,
     deliveryWeek,
     acquiredPrice: price ?? (owned ? type.price : 0),
+    ...(engine ? { engine } : {}),
     config: { ...(config ?? type.config) },
     cabin: { ...defaultCabin(type), ...(cabin ?? {}) },
     upgrades: [],
@@ -109,7 +116,8 @@ export const weeklyFromMonthly = (m) => (m * 12) / 52;
 // ---------------------------------------------------------------------------
 // Factory orders
 
-export function orderAircraft(state, typeId, qty = 1, config, cabin) {
+// opts.engine: engine choice; opts.launch: launch-customer terms on a type not yet flying.
+export function orderAircraft(state, typeId, qty = 1, config, cabin, opts = {}) {
   if (state.restructuring?.status === 'active') return fail('Not allowed while in Chapter 11: new aircraft orders need the court’s approval');
   const type = aircraftById[typeId];
   if (!type) return fail('Unknown aircraft type');
@@ -125,14 +133,26 @@ export function orderAircraft(state, typeId, qty = 1, config, cabin) {
     const v = validateConfig(type, config, cabin, year);
     if (!v.ok) return v;
   }
-  const discount = Math.min(0.25, 0.02 * (qty - 1));
+  const engines = engineOptions(typeId);
+  const engine = engines.length ? (engines.find((e) => e.id === opts.engine) ?? engines[0]).id : undefined;
+  let launch = false;
+  if (opts.launch) {
+    const t = launchTerms(state, typeId);
+    if (t.reasons.length) return fail(t.reasons[0]);
+    if (qty < t.minQty) return fail(`Launch customers commit to at least ${t.minQty} aircraft`);
+    launch = true;
+  }
+  const discount = Math.min(0.25, 0.02 * (qty - 1)) + (launch ? LAUNCH_DISCOUNT : 0);
   const unit = type.price * (1 - discount);
-  const deposit = unit * 0.2 * qty;
-  if (state.cash < deposit) return fail(`Pre-delivery deposits of ${money(deposit)} needed (20%)`);
+  const depositRate = launch ? LAUNCH_DEPOSIT : 0.2;
+  const deposit = unit * depositRate * qty;
+  if (state.cash < deposit) return fail(`Pre-delivery deposits of ${money(deposit)} needed (${Math.round(depositRate * 100)}%)`);
+  ensureProgramme(state, typeId);
   state.cash -= deposit;
   state.ledgerCapex.aircraft += deposit;
   const backlog = state.orders.filter((o) => o.type === typeId).length;
-  const first = Math.max(state.week + type.lead + randInt(state, 0, 8), weekOfYearStart(type.intro) + randInt(state, 0, 12));
+  // Launch customers are first in line when the type enters service.
+  const first = launch ? Math.max(state.week + 13, weekOfYearStart(type.intro) + randInt(state, 0, 8)) : Math.max(state.week + type.lead + randInt(state, 0, 8), weekOfYearStart(type.intro) + randInt(state, 0, 12));
   for (let i = 0; i < qty; i++) {
     state.orders.push({
       id: newId(state, 'po'),
@@ -140,12 +160,17 @@ export function orderAircraft(state, typeId, qty = 1, config, cabin) {
       orderedWeek: state.week,
       deliveryWeek: first + (backlog + i) * 3,
       price: unit,
-      paid: unit * 0.2,
+      paid: unit * depositRate,
+      ...(engine ? { engine } : {}),
+      ...(launch ? { launch: true } : {}),
       config: { ...(config ?? type.config) },
       cabin: { ...defaultCabin(type), ...(cabin ?? {}) },
     });
   }
-  log(state, `Ordered ${qty}× ${type.name} at ${money(unit)} each${discount ? ` (${Math.round(discount * 100)}% volume discount)` : ''}. First delivery in ${first - state.week} weeks.`, 'info', 'fleet');
+  // New programmes are frozen while a type is grounded.
+  const frozen = activeGrounding(state, typeId);
+  if (frozen) for (const o of state.orders) if (o.type === typeId && o.orderedWeek === state.week && o.deliveryWeek < frozen.until) o.deliveryWeek = frozen.until;
+  log(state, `Ordered ${qty}× ${type.name}${engine ? ` with ${engines.find((e) => e.id === engine).name} engines` : ''} at ${money(unit)} each${discount ? ` (${Math.round(discount * 100)}% ${launch ? 'launch-customer and volume' : 'volume'} discount)` : ''}. First delivery in ${first - state.week} weeks.`, 'info', 'fleet');
   return ok();
 }
 
@@ -162,7 +187,7 @@ export function cancelOrder(state, orderId) {
 
 const LESSORS = ['AerCap', 'SMBC Aviation Capital', 'Air Lease Corp', 'Avolon', 'BOC Aviation', 'Carlyle Aviation', 'Aviation Capital Group', 'CDB Aviation', 'Aircastle', 'Jackson Square'];
 const SELLERS = ['Liquidator (bankrupt carrier)', 'Fleet renewal sale', 'Lessor remarketing', 'Government disposal', 'Private owner', 'Charter operator'];
-const POPULARITY = { bn2: 1, dhc6: 1.5, dhc6s4: 1, l410: 1, emb110: 1, do228: 1, j31: 1, c208: 1.5, b1900: 1.2, an24: 0.6, emb120: 1, sh360: 0.6, dhc7: 0.5, dh8a: 1.2, dh8c: 1.2, atr42: 1.5, f50: 1, do328: 0.6, saab2000: 0.4, cv880: 0.4, vc10: 0.4, trident: 0.5, yak40: 0.3, tu154: 0.6, il62: 0.3, il86: 0.2, bae146: 1, f70: 0.5, erj135: 0.8, crj7: 1.2, e190: 2, a318: 0.4, b717: 0.8, md90: 0.6, b74sp: 0.3, a310: 0.8, b762: 1, ssj100: 0.4, arj21: 0.3, c919: 0.4, dc3: 3, dc6: 3, l1049: 2, dc7c: 2, vc8: 2, l188: 1, f27: 2, comet4: 0.7, caravelle: 2, b707: 4, dc8: 2, b727: 5, dc9: 4, bac111: 2, b732: 4, b741: 2, b742: 3, dc10: 3, l1011: 1.5, concorde: 0.03, a300: 1.5, a306: 1.5, b752: 3, b763: 3, md80: 4, b733: 4, b738: 5, a320c: 5, a321c: 3, f100: 1.5, erj145: 2, crj2: 2, md11: 1.5, b744: 3, a343: 2, a346: 1, b772: 3, a333: 3, saab340: 1.5, atr725: 2, a320n: 6, b38m: 5, a321n: 5, a223: 3, e175: 3, e195e2: 2, atr72: 3, q400: 2, crj9: 2, a221: 1, a319n: 1, a321xlr: 1.5, b3xm: 1, b789: 3, b788: 2, b78x: 1.5, a359: 3, a35k: 1.5, a339: 2, b77w: 3, b779: 0.5, a388: 1, b748: 0.5, b763f: 1.5, b77f: 1.5, b738f: 2, a332f: 1, atr72f: 1, a321f: 1, b77wsf: 1, b748f: 0.7, a350f: 0.3 };
+const POPULARITY = { bn2: 1, dhc6: 1.5, dhc6s4: 1, l410: 1, emb110: 1, do228: 1, j31: 1, c208: 1.5, b1900: 1.2, an24: 0.6, emb120: 1, sh360: 0.6, dhc7: 0.5, dh8a: 1.2, dh8c: 1.2, atr42: 1.5, f50: 1, do328: 0.6, saab2000: 0.4, cv880: 0.4, vc10: 0.4, trident: 0.5, yak40: 0.3, tu154: 0.6, il62: 0.3, il86: 0.2, bae146: 1, f70: 0.5, erj135: 0.8, crj7: 1.2, e190: 2, a318: 0.4, b717: 0.8, md90: 0.6, b74sp: 0.3, a310: 0.8, b762: 1, ssj100: 0.4, arj21: 0.3, c919: 0.4, dc3: 3, dc6: 3, l1049: 2, dc7c: 2, vc8: 2, l188: 1, f27: 2, comet4: 0.7, caravelle: 2, b707: 4, dc8: 2, b727: 5, dc9: 4, bac111: 2, b732: 4, b741: 2, b742: 3, dc10: 3, l1011: 1.5, concorde: 0.03, a300: 1.5, a306: 1.5, b752: 3, b763: 3, md80: 4, b733: 4, b738: 5, a320c: 5, a321c: 3, f100: 1.5, erj145: 2, crj2: 2, md11: 1.5, b744: 3, a343: 2, a346: 1, b772: 3, a333: 3, saab340: 1.5, atr725: 2, a320n: 6, b38m: 5, a321n: 5, a223: 3, e175: 3, e195e2: 2, atr72: 3, q400: 2, crj9: 2, a221: 1, a319n: 1, a321xlr: 1.5, b3xm: 1, b789: 3, b788: 2, b78x: 1.5, a359: 3, a35k: 1.5, a339: 2, b77w: 3, b779: 0.5, a388: 1, b748: 0.5, b778: 0.3, a225: 0.5, b763f: 1.5, b77f: 1.5, b738f: 2, a332f: 1, atr72f: 1, a321f: 1, b77wsf: 1, b748f: 0.7, a350f: 0.3 };
 
 export function refreshMarkets(state, initial = false) {
   state.market.leases = state.market.leases.filter((o) => o.expiresWeek > state.week);
@@ -446,7 +471,7 @@ export function checkOverdue(state, ac, check) {
 export function fuelFactor(state, ac) {
   const age = ageYears(state, ac);
   const upgrades = sum(ac.upgrades, (u) => UPGRADES[u].fuel ?? 0);
-  return (1 + Math.max(0, age - 10) * 0.005) * (1 + upgrades);
+  return (1 + Math.max(0, age - 10) * 0.005) * (1 + upgrades) * (engineOf(ac)?.fuel ?? 1);
 }
 
 export function productQuality(ac) {
@@ -472,10 +497,11 @@ export function fleetFamilies(state) {
   for (const ac of state.fleet) {
     if (ac.retired) continue;
     const f = familyOf(ac.type);
-    if (!fams.has(f)) fams.set(f, { family: f, count: 0, types: new Set() });
+    if (!fams.has(f)) fams.set(f, { family: f, count: 0, types: new Set(), engines: new Set() });
     const e = fams.get(f);
     e.count += 1;
     e.types.add(ac.type);
+    if (ac.engine) e.engines.add(ac.engine);
   }
   return [...fams.values()].sort((a, b) => b.count - a.count);
 }
@@ -497,7 +523,8 @@ export function commonality(state) {
     cabinFactor: 1 + Math.min(0.08, 0.015 * extra),
     engineerFactor: 1 + Math.min(0.25, 0.04 * extra),
     overhead: extra * FAMILY_OVERHEAD,
-    mx: Object.fromEntries(list.map((f) => [f.family, familyMxFactor(f.count)])),
+    // Two engine makes in one family means two sets of spares and tooling.
+    mx: Object.fromEntries(list.map((f) => [f.family, familyMxFactor(f.count) * (f.engines.size > 1 ? 1.04 : 1)])),
   };
 }
 

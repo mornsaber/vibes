@@ -484,6 +484,8 @@ export function acquireRival(state, id, payWith = 'cash', { asBrand = false } = 
     const w = state.staff[role];
     const gap = Math.max(0, Math.round(req[role] * 1.05) - w.count);
     if (!gap) continue;
+    // Two pilot groups means two seniority lists to merge.
+    if (role === 'pilots' && w.union.recognized) state.queue.push({ event: 'seniority_merger', data: { name: r.name, pilots: gap } });
     const mix = [0.25, 0.35, 0.3, 0.07, 0.03];
     mix.forEach((m, g) => addToGrade(w, g, Math.round(gap * m), 6));
     w.morale = clamp(w.morale - 8, 0, 100);

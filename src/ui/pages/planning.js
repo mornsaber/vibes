@@ -1,11 +1,11 @@
-import { G, esc, money, pct, int, num, kpi, panel, table, tabs, options, airportOptions, bar, pill, ap, typeName, statusPill } from '../util.js';
+import { G, statement, esc, money, pct, int, num, kpi, panel, table, tabs, options, airportOptions, bar, pill, ap, typeName, statusPill } from '../util.js';
 import { formValues } from '../app.js';
 
 export function render(c) {
   const tab = c.params[0] ?? 'hubs';
   const body = { hubs, capacity, crew, slots }[tab] ?? hubs;
   return `<div class="page-head"><h1>Planning</h1></div>
-  ${tabs('planning', [['hubs', 'Hubs'], ['capacity', 'Fleet capacity & idle'], ['crew', 'Crew plan'], ['slots', 'Slots']], tab)}
+  ${tabs('planning', [['hubs', 'Hubs'], ['capacity', 'Fleet capacity & idle'], ['crew', 'Crew & bases'], ['slots', 'Slots']], tab)}
   ${body(c)}`;
 }
 
@@ -119,7 +119,56 @@ function crew(c) {
     { h: 'Needed in 13 wks', cls: 'num', v: (r) => int(ahead[r]) },
     { h: 'Gap', cls: 'num', v: (r) => { const gap = s.staff[r].count + s.staff[r].pipeline.reduce((t, p) => t + p.n, 0) - ahead[r]; return `<span class="${gap < 0 ? 'bad' : 'good'}">${gap >= 0 ? '+' : ''}${int(gap)}</span>`; } },
     { h: 'Auto-hire', v: (r) => (s.staffAuto[r] ? pill('On', 'good') : pill('Off', 'warn')) },
-  ])}<p class="muted small">Requirements come from scheduled block hours: long flights need augmented cockpit crews (3 pilots over 8 h, 4 over 12 h) and premium cabins need more flight attendants. <a href="#management/staffing">Manage staffing ›</a></p>`);
+  ])}<p class="muted small">Requirements come from scheduled block hours: long flights need augmented cockpit crews (3 pilots over 8 h, 4 over 12 h) and premium cabins need more flight attendants. <a href="#management/staffing">Manage staffing ›</a></p>
+  ${furloughRow(s)}`) + crewBases(s) + scopePanel(s);
+}
+
+function furloughRow(s) {
+  const rows = ['pilots', 'cabin'].map((r) => {
+    const w = s.staff[r];
+    const back = Math.floor(w.furloughed ?? 0);
+    return `<div class="row" data-form><b class="w-140">${G.ROLES[r].name}</b><input type="number" name="n" value="5" min="1" class="w-60"><button class="small danger" data-action="furlough" data-role="${r}">Furlough juniors</button>${back ? `<button class="small" data-action="recall" data-role="${r}">Recall ${back}</button><small class="muted">on the recall list</small>` : ''}</div>`;
+  }).join('');
+  return `<h3>Seniority</h3>${rows}<p class="muted small">Furloughs go by reverse seniority: the most junior crew leave first, cheaply, and keep recall rights — recalling them is far quicker than hiring. Your remaining crew are more senior and better paid.${s.crewIntegration?.until > s.week ? ` Seniority arbitration runs for another ${s.crewIntegration.until - s.week} weeks (+10% crews needed).` : ''}</p>`;
+}
+
+function crewBases(s) {
+  const hubs = s.hubs.map((h) => h.code);
+  const bases = G.crewBaseCodes(s);
+  const remote = s.routes.filter((r) => G.routeBase(s, r).remote);
+  const candidates = G.stations(s).filter((x) => !bases.includes(x)).map((x) => G.crewBaseTerms(s, x)).sort((a, b) => a.wage - b.wage).slice(0, 12);
+  return panel('Crew bases', `${table(bases, [
+    { h: 'Base', v: (x) => `<b>${x}</b> ${esc(ap(x).city)}${hubs.includes(x) ? ` ${pill('Hub', 'info')}` : ''}` },
+    { h: 'Crew pay vs home', cls: 'num', v: (x) => pct(G.REGIONS[ap(x).region].wage / G.REGIONS[ap(hubs[0]).region].wage) },
+    { h: 'Routes crewed', cls: 'num', v: (x) => s.routes.filter((r) => G.routeBase(s, r).code === x && !G.routeBase(s, r).remote).length },
+    { h: 'Crew based here', cls: 'num', v: (x) => int(G.crewAtBase(s, x)) },
+    { h: '', v: (x) => (hubs.includes(x) ? '' : `<button class="small danger" data-action="close-crew-base" data-code="${x}">Close</button>`) },
+  ])}
+  ${remote.length ? `<div class="callout warn small">${remote.length} route${remote.length > 1 ? 's' : ''} touch no crew base (${remote.slice(0, 4).map((r) => `${r.a}–${r.b}`).join(', ')}${remote.length > 4 ? '…' : ''}): crews are positioned in at ${money(G.POSITIONING)} per crew member per flight and need ${Math.round((G.REMOTE_PRODUCTIVITY - 1) * 100)}% more crew hours.</div>` : ''}
+  ${candidates.length ? `<h3>Open a base</h3>${table(candidates, [
+    { h: 'Airport', v: (t) => `<b>${t.code}</b> ${esc(ap(t.code).city)}${t.foreign ? ` ${pill('Abroad', 'warn')}` : ''}` },
+    { h: 'Crew pay vs home', cls: 'num', v: (t) => pct(t.wage) },
+    { h: '', v: (t) => (t.reasons.length ? `<small class="muted">${esc(t.reasons[0])}</small>` : `<button class="small" data-action="open-crew-base" data-code="${t.code}" title="${t.objection ? 'The pilots’ union will object' : ''}">Open (${money(t.cost)})${t.objection ? ' ⚠' : ''}</button>`) },
+  ])}` : ''}
+  <p class="muted small">Crews live at bases; every hub is one. A route is crewed from a base at either end (the cheaper one if both are bases), at that base's local pay. A base costs ${money(G.CREW_BASE_COST)} to set up and ${money(G.CREW_BASE_WEEKLY)} a week. Closing one means relocating its crews, and some quit rather than move.</p>`);
+}
+
+function scopePanel(s) {
+  const st = G.scopeStatus(s);
+  if (!st.applies) return panel('Scope clauses', '<p class="muted">Your pilots have no union contract, so there are no limits on subsidiary flying.</p>');
+  const sc = s.scope;
+  return panel('Scope clauses (pilots’ contract)', `${statement([
+    ['Regional brands', `aircraft up to ${sc.regionalSeats} seats`],
+    ['Subsidiary share of group flying', `${pct(st.share)} of ${pct(sc.subsidiaryShare)} allowed`],
+    ['Low-cost brand crews', sc.lccSeparate ? 'Own cheaper contract' : 'Mainline contract (no crew saving)'],
+    ['Foreign crew bases', sc.foreignBases ? 'Allowed' : 'Disputed by the union'],
+  ])}
+  ${st.violations.map((v) => `<div class="callout warn small">Scope violation: ${esc(v)}. Expect monthly grievances and possible work-to-rule.</div>`).join('')}
+  <h3>Negotiate relief</h3>${table(Object.entries(G.SCOPE_RELIEF), [
+    { h: 'Change', v: ([, r]) => `<b>${esc(r.label)}</b><br><small class="muted">${esc(r.desc)}</small>` },
+    { h: 'Price', v: ([, r]) => `+${pct(r.pay)} pilot pay${r.fee ? ` + ${money(r.fee)}` : ''}` },
+    { h: '', v: ([k]) => `<button class="small" data-action="scope-relief" data-kind="${k}">Negotiate</button>` },
+  ])}`);
 }
 
 function slots(c) {
@@ -136,6 +185,11 @@ function slots(c) {
 }
 
 export const actions = {
+  furlough: (el, ctx) => (confirm('Furlough the most junior crew?') ? G.furlough(ctx.game, el.dataset.role, Number(formValues(el).n || 0)) : null),
+  recall: (el, ctx) => G.recall(ctx.game, el.dataset.role, Math.floor(ctx.game.staff[el.dataset.role].furloughed ?? 0)),
+  'open-crew-base': (el, ctx) => G.openCrewBase(ctx.game, el.dataset.code),
+  'close-crew-base': (el, ctx) => (confirm('Close this crew base? Its crews must relocate.') ? G.closeCrewBase(ctx.game, el.dataset.code) : null),
+  'scope-relief': (el, ctx) => (confirm('Offer the pilots’ union a pay rise for this change?') ? G.buyScopeRelief(ctx.game, el.dataset.kind) : null),
   'open-hub': (el, ctx) => G.openHub(ctx.game, formValues(el).code),
   'auto-idle': (el, ctx) => G.autoAssignIdle(ctx.game),
   'hub-timetable': (el, ctx) => G.setHubTimetable(ctx.game, el.dataset.code, { banks: Number(formValues(el).banks) }),

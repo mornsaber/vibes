@@ -4,6 +4,8 @@
 // choices:[{label, hint, tone, disabled}], data}, resolve(state, i, data) -> message }.
 // `data` must stay JSON-serialisable because pending events live in the save.
 
+import { groundTypes } from './oem.js';
+import { mergeSeniority, SENIORITY_OPTIONS } from './crew.js';
 import { AIRPORTS, airportByCode, COUNTRIES } from '../data/airports.js';
 import { AIRCRAFT, aircraftById, inService } from '../data/aircraft.js';
 import { ROLES } from '../data/business.js';
@@ -734,6 +736,33 @@ EVENTS.push(
       closeAirspace(state, 'Eastern Europe', Math.round(104 * sev(d)), 1.06);
       state.service.security = Math.max(state.service.security ?? 3, 3);
       return 'Eastern European airspace closed; Europe–Asia flights reroute.';
+    },
+  },
+  {
+    id: 'seniority_merger', weight: 0,
+    build: (s, d) => ({
+      title: 'Merging the pilot seniority lists',
+      text: `${d.pilots} pilots from ${d.name} join your airline. Seniority decides who flies what, from where, and who is furloughed first — so how the two lists merge will make one group unhappy.`,
+      data: d,
+      choices: [
+        { label: 'Merge by date of hire', hint: 'Fair to the newcomers; your own pilots lose ground (morale −8)' },
+        { label: 'Staple them to the bottom', hint: 'Your pilots keep their places; the newcomers are furious (morale −12, union stronger, sick-out risk)' },
+        { label: 'Binding arbitration', hint: '$4M and six months of separate crew operations (+10% crews needed)' },
+      ],
+    }),
+    resolve: (state, i) => mergeSeniority(state, SENIORITY_OPTIONS[i]),
+  },
+  {
+    id: 'max_grounding', weight: 0,
+    build: (s, d) => ({
+      title: 'Boeing 737 MAX grounded worldwide',
+      text: 'After two fatal accidents linked to a flight-control system, regulators ground every 737 MAX. Boeing stops deliveries until the fix is certified.',
+      data: d, choices: ack(),
+    }),
+    resolve(state, _i, d) {
+      const weeks = Math.round(60 + 30 * sev(d));
+      groundTypes(state, ['b38m', 'b3xm'], weeks, 'Boeing 737 MAX worldwide grounding');
+      return `737 MAX grounded for about ${Math.round(weeks / 4.3)} months.`;
     },
   },
   {

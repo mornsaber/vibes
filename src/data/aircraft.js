@@ -130,6 +130,9 @@ export const AIRCRAFT = [
   A('a35k', 'Airbus A350-1000', 'Airbus', 'wide', 480, 'J40 W28 Y280', 16100, 900, 8.1, 185e6, 24, 2900, 156, 'wide', 2018),
   A('b77w', 'Boeing 777-300ER', 'Boeing', 'wide', 550, 'F8 J42 W28 Y300', 13600, 900, 9.2, 160e6, 25, 3000, 117, 'wide', 2004, 2023),
   A('b779', 'Boeing 777-9', 'Boeing', 'wide', 520, 'J48 W28 Y300', 13500, 905, 9.4, 210e6, 25, 3000, 260, 'wide', 2026),
+  // Announced programmes (first deliveries after 2027): open to launch customers.
+  A('b778', 'Boeing 777-8', 'Boeing', 'wide', 470, 'J42 W28 Y260', 16100, 905, 8.8, 205e6, 22, 3000, 260, 'wide', 2030),
+  A('a225', 'Airbus A220-500', 'Airbus', 'narrow', 190, 'J12 Y140', 5900, 830, 2.55, 52e6, 3, 2100, 117, 'narrow', 2031),
   A('b748', 'Boeing 747-8', 'Boeing', 'jumbo', 605, 'F8 J70 W32 Y250', 14300, 910, 11.5, 200e6, 20, 3100, 130, 'jumbo', 2012, 2023),
   A('a388', 'Airbus A380-800', 'Airbus', 'jumbo', 853, 'F14 J76 W44 Y420', 14800, 900, 13.5, 180e6, 15, 3000, 156, 'jumbo', 2007, 2021),
   // Freighters
@@ -168,13 +171,13 @@ export const FAMILIES = {
   'Boeing 737 NG/MAX': ['b733', 'b738', 'b38m', 'b3xm', 'b738f'],
   'Boeing 737 Original': ['b732'],
   'Boeing 757/767': ['b752', 'b762', 'b763', 'b752f', 'b763f'],
-  'Boeing 777': ['b772', 'b77w', 'b779', 'b77f', 'b77wsf'],
+  'Boeing 777': ['b772', 'b77w', 'b779', 'b778', 'b77f', 'b77wsf'],
   'Boeing 787': ['b788', 'b789', 'b78x'],
   'Boeing 747': ['b741', 'b742', 'b74sp', 'b744', 'b748', 'b742f', 'b744f', 'b748f'],
   'Airbus A330/A340': ['a333', 'a339', 'a343', 'a346', 'a332f'],
   'Airbus A350': ['a359', 'a35k', 'a350f'],
   'Airbus A300/A310': ['a300', 'a306', 'a310'],
-  'Airbus A220': ['a221', 'a223'],
+  'Airbus A220': ['a221', 'a223', 'a225'],
   'Embraer E-Jet': ['e175', 'e190', 'e195e2'],
   'Embraer ERJ': ['erj135', 'erj145'],
   'Bombardier CRJ': ['crj2', 'crj7', 'crj9'],
@@ -189,6 +192,33 @@ export const FAMILIES = {
   'Boeing 727': ['b727', 'b727f'],
   'Douglas DC-8': ['dc8', 'dc8f'],
 };
+// ---------------------------------------------------------------------------
+// Engine options. fuel/mx are multipliers on the type's burn and hourly
+// maintenance; an issue is a historical in-service problem that sends a share
+// of affected engines to the shop each month during its years.
+const GTF = { name: 'Powder-metal inspections', from: 2023, to: 2026, monthly: 0.05, weeks: [8, 20] };
+const T1000 = { name: 'Turbine blade durability inspections', from: 2016, to: 2020, monthly: 0.04, weeks: [6, 14] };
+const E = (id, name, fuel = 1, mx = 1, issue = null) => ({ id, name, fuel, mx, issue });
+const CF6_PW_RB = [E('cf6', 'GE CF6-80C2'), E('pw4000', 'P&W PW4000', 1.005, 0.97), E('rb211', 'Rolls-Royce RB211-524', 0.99, 1.03)];
+const CEO = [E('cfm56', 'CFM56-5B'), E('v2500', 'IAE V2500', 0.99, 1.03)];
+const NEO = [E('leap1a', 'CFM LEAP-1A'), E('gtf', 'P&W GTF PW1100G', 0.985, 1.02, GTF)];
+const B787 = [E('genx', 'GE GEnx-1B'), E('trent1000', 'Rolls-Royce Trent 1000', 0.99, 1.04, T1000)];
+export const ENGINES = {
+  b752: [E('rb211', 'Rolls-Royce RB211-535'), E('pw2000', 'P&W PW2037', 0.99, 1.04)],
+  b762: CF6_PW_RB, b763: CF6_PW_RB, b744: CF6_PW_RB, b742: [E('jt9d', 'P&W JT9D'), E('cf6', 'GE CF6-50', 0.99, 1.02), E('rb211', 'Rolls-Royce RB211-524', 0.99, 1.03)],
+  a306: [E('cf6', 'GE CF6-80C2'), E('pw4000', 'P&W PW4000', 1.005, 0.97)],
+  a333: [E('cf6', 'GE CF6-80E1'), E('pw4000', 'P&W PW4168', 1.01, 0.97), E('trent700', 'Rolls-Royce Trent 700', 0.985, 1.02)],
+  b772: [E('ge90', 'GE90-94B'), E('pw4090', 'P&W PW4090', 1.01, 0.97), E('trent800', 'Rolls-Royce Trent 800', 0.99, 1.02)],
+  a320c: CEO, a321c: CEO,
+  a319n: NEO, a320n: NEO, a321n: NEO, a321xlr: NEO,
+  a221: [E('gtf', 'P&W GTF PW1500G', 1, 1, GTF)], a223: [E('gtf', 'P&W GTF PW1500G', 1, 1, GTF)], a225: [E('gtf', 'P&W GTF PW1500G', 1, 1, GTF)],
+  e195e2: [E('gtf', 'P&W GTF PW1900G', 1, 1, GTF)],
+  b788: B787, b789: B787, b78x: B787,
+  a388: [E('trent900', 'Rolls-Royce Trent 900'), E('gp7200', 'Engine Alliance GP7200', 1.005, 0.97)],
+};
+export const engineOptions = (typeId) => ENGINES[typeId] ?? [];
+export const engineOf = (ac) => engineOptions(ac.type).find((e) => e.id === ac.engine) ?? engineOptions(ac.type)[0] ?? null;
+
 const familyIndex = Object.fromEntries(Object.entries(FAMILIES).flatMap(([f, ids]) => ids.map((id) => [id, f])));
 export const familyOf = (typeId) => familyIndex[typeId] ?? aircraftById[typeId]?.name ?? typeId;
 

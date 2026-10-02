@@ -10,6 +10,7 @@ import { clamp, fail, ok, rand, log, money, sum, monthKey } from './core.js';
 import { typeOf, commonality } from './fleet.js';
 import { blockHours, routeById, stations, activeSchedule, seasonOf } from './network.js';
 import { facilityEngineers } from './maintenance.js';
+import { routeBase, REMOTE_PRODUCTIVITY, integrationFactor } from './crew.js';
 
 export const PILOT_HOURS = 15; // productive block hours per pilot per week
 export const CABIN_HOURS = 16;
@@ -98,7 +99,7 @@ function crewHours(state, horizon = 0) {
       const r = routeById(state, s.routeId);
       if (!r) continue;
       const bh = blockHours(type, r.distance);
-      const legHours = s.freq * 2 * bh;
+      const legHours = s.freq * 2 * bh * (routeBase(state, r).remote ? REMOTE_PRODUCTIVITY : 1);
       pilot += legHours * (type.cockpit ?? cockpitCrew(bh) + (type.fe ? 1 : 0));
       cabin += legHours * cabinCrewPerFlight(ac.config);
     }
@@ -119,8 +120,8 @@ export function staffRequirements(state, horizon = 0) {
   // Mixed fleets need separately type-rated crews and engineers.
   const com = commonality(state);
   const req = {
-    pilots: Math.ceil((hours.pilot / PILOT_HOURS) * RESERVE * com.pilotFactor),
-    cabin: Math.ceil((hours.cabin / CABIN_HOURS) * RESERVE * com.cabinFactor),
+    pilots: Math.ceil((hours.pilot / PILOT_HOURS) * RESERVE * com.pilotFactor * integrationFactor(state)),
+    cabin: Math.ceil((hours.cabin / CABIN_HOURS) * RESERVE * com.cabinFactor * integrationFactor(state)),
     engineers: Math.ceil(sum(fleet, (a) => ENGINEERS_PER_AC[typeOf(a).mx]) * com.engineerFactor + facilityEngineers(state) + (v.mro3p?.level ?? 0) * 60),
     ground: Math.ceil(state.hubs.length * 50 + (stations(state).length - state.hubs.length) * 6 + pax / 350 + (v.handling?.level ?? 0) * 80),
   };

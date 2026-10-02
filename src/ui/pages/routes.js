@@ -121,7 +121,7 @@ function detail(c, route) {
   const season = G.seasonOf(s.week);
   const seasonal = aircraft.some((ac) => G.isSeasonal(ac));
   return `<div class="page-head"><h1><a href="#routes" class="muted">Routes ›</a> ${route.a}–${route.b}</h1>
-    <div class="row"><span class="muted">${esc(apName(route.a))} ⇄ ${esc(apName(route.b))} · ${int(route.distance)} km${route.fifth ? ' · 5th freedom' : ''} · ${esc(G.treatyFor(s, ap(route.a).country, ap(route.b).country).label)}</span>
+    <div class="row"><span class="muted">${esc(apName(route.a))} ⇄ ${esc(apName(route.b))} · ${int(route.distance)} km${route.fifth ? ' · 5th freedom' : ''} · ${esc(G.treatyFor(s, ap(route.a).country, ap(route.b).country).label)} · crews ${esc(G.routeBaseLabel(s, route.id))}${G.jvFor(s, route.a, route.b) ? ` · ${pill('Joint venture', 'info')}` : ''}</span>
     ${(s.brands ?? []).length ? `<select data-change="route-brand" data-id="${route.id}" title="Brand">${options(G.brands(s).map((b) => [b.id, b.name]), route.brand ?? 'main')}</select>` : ''}
     <button class="danger small" data-action="close-route" data-id="${route.id}">Close route</button></div></div>
   <div class="grid kpis">

@@ -12,9 +12,18 @@ export function render(c) {
   const t = tab ?? 'aircraft';
   const body = { aircraft, groups, orders, market }[t] ?? aircraft;
   return `<div class="page-head"><h1>Fleet</h1></div>
+  ${groundingNotes(c.state)}
   ${tabs('fleet', [['aircraft', 'Aircraft'], ['groups', 'Families & groups'], ['orders', 'On order'], ['market', 'Acquire aircraft']], t)}
   ${body(c)}`;
 }
+
+function groundingNotes(s) {
+  const { groundings } = G.oemNews(s);
+  return groundings.map((g) => `<div class="callout warn">${esc(g.reason)}: ${g.types.map((t) => esc(typeName(t))).join(' / ')} grounded for another ${g.until - s.week} weeks. Deliveries are frozen; the manufacturer pays partial compensation for grounded aircraft.</div>`).join('');
+}
+
+const engineName = (ac) => G.engineOf(ac)?.name ?? '';
+const engineNote = (e) => [e.fuel !== 1 && `fuel ${e.fuel < 1 ? '−' : '+'}${Math.round(Math.abs(1 - e.fuel) * 1000) / 10}%`, e.mx !== 1 && `maintenance ${e.mx < 1 ? '−' : '+'}${Math.round(Math.abs(1 - e.mx) * 100)}%`, e.issue && `${e.issue.name.toLowerCase()} ${e.issue.from}–${e.issue.to}`].filter(Boolean).join(', ');
 
 // Aircraft wear the livery of the brand whose routes they fly.
 export function acLivery(s, ac) {
@@ -96,8 +105,9 @@ export function commonalityPanel(s) {
 function orders(c) {
   const s = c.state;
   const arriving = s.fleet.filter((a) => !G.isDelivered(s, a)).sort((a, b) => a.deliveryWeek - b.deliveryWeek);
+  const programmes = G.oemNews(s).programmes;
   return `${panel('Factory orders', table([...s.orders].sort((a, b) => a.deliveryWeek - b.deliveryWeek), [
-    { h: 'Type', v: (o) => esc(typeName(o.type)) },
+    { h: 'Type', v: (o) => `${esc(typeName(o.type))}${o.launch ? ` ${pill('Launch customer', 'info')}` : ''}${o.engine ? `<br><small class="muted">${esc(G.engineOptions(o.type).find((e) => e.id === o.engine)?.name ?? '')}</small>` : ''}` },
     { h: 'Ordered', v: (o) => G.dateLabel(o.orderedWeek) },
     { h: 'Delivery', v: (o) => `${G.dateLabel(o.deliveryWeek)} <small class="muted">(${o.deliveryWeek - s.week} wk)</small>` },
     { h: 'Price', cls: 'num', v: (o) => money(o.price) },
@@ -106,6 +116,11 @@ function orders(c) {
     { h: 'Layout', v: (o) => G.CLASSES.filter((k) => o.config[k]).map((k) => `${k}${o.config[k]}`).join(' ') || '—' },
     { h: '', v: (o) => `<button class="small danger" data-action="cancel-order" data-id="${o.id}">Cancel</button>` },
   ], { empty: 'No factory orders. New aircraft take 1.5–5 years to arrive.' }))}
+  ${programmes.length ? panel('New aircraft programmes', table(programmes, [
+    { h: 'Type', v: (p) => esc(p.type.name) },
+    { h: 'Entry into service', v: (p) => `${p.type.intro}` },
+    { h: 'Status', v: (p) => (!p.announced ? '<span class="muted">Manufacturer says on schedule — revealed a year before first delivery</span>' : p.delay ? pill(`Delayed ${Math.round(p.delay / 4.3)} months`, 'bad') : pill('On schedule', 'good')) },
+  ])) : ''}
   ${panel('Lease deliveries & used aircraft in induction', fleetTable(s, arriving, { empty: 'Nothing arriving.' }))}`;
 }
 
@@ -146,9 +161,21 @@ function market(c) {
     { h: 'Fuel', cls: 'num', v: (t) => `${t.burn} kg/km` },
     { h: 'List price', cls: 'num', v: (t) => money(t.price) },
     { h: 'Lead time', v: (t) => (G.inProduction(t, year) ? `${t.lead} wk <small class="muted">(~${Math.max(G.yearOf(s.week + t.lead), t.intro)})</small>` : `<span class="muted">Production ended ${t.out}</span>`) },
-    { h: '', v: (t) => (G.inProduction(t, year) ? `<div class="row" data-form><input type="number" name="qty" value="1" min="1" max="50" class="w-60"><button class="small" data-action="order" data-type="${t.id}">Order</button></div>` : '') },
+    { h: '', v: (t) => (G.inProduction(t, year) ? orderForm(s, t, year) : '') },
   ]))}
-  <p class="muted small">Orders need a 20% pre-delivery deposit; the balance is due on delivery (financed automatically with an aircraft loan if cash is short). Volume discounts of 2% per extra aircraft, up to 25%.</p>`;
+  <p class="muted small">Orders need a 20% pre-delivery deposit; the balance is due on delivery (financed automatically with an aircraft loan if cash is short). Volume discounts of 2% per extra aircraft, up to 25%. Types not yet flying can be ordered as a <b>launch customer</b>: ${Math.round(G.LAUNCH_DISCOUNT * 100)}% extra discount, ${Math.round(G.LAUNCH_DEPOSIT * 100)}% deposit and the first deliveries — but new programmes often slip, and you only learn how badly about a year before entry into service (the manufacturer pays some compensation).</p>`;
+}
+
+function orderForm(s, t, year) {
+  const engines = G.engineOptions(t.id);
+  const launch = year < t.intro;
+  const terms = launch ? G.launchTerms(s, t.id) : null;
+  const grounded = G.activeGrounding(s, t.id);
+  return `<div class="stack tight" data-form>
+    ${engines.length > 1 ? `<select name="engine" title="Engine choice">${options(engines.map((e) => [e.id, `${e.name}${engineNote(e) ? ` (${engineNote(e)})` : ''}`]))}</select>` : engines.length ? `<small class="muted">${esc(engines[0].name)}</small>` : ''}
+    <div class="row nowrap"><input type="number" name="qty" value="${launch ? terms.minQty : 1}" min="1" max="50" class="w-60"><button class="small" data-action="order" data-type="${t.id}">Order</button>${launch ? `<button class="small primary" data-action="order-launch" data-type="${t.id}" title="Minimum ${terms.minQty}; programme delay risk ${Math.round(terms.risk * 100)}%">Launch customer</button>` : ''}</div>
+    ${grounded ? '<small class="bad">Grounded — deliveries frozen</small>' : launch ? `<small class="muted">Enters service ${t.intro} · delay risk ${terms.risk >= 0.7 ? 'high' : terms.risk >= 0.4 ? 'moderate' : 'low'}</small>` : ''}
+  </div>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -260,6 +287,7 @@ function detail(c, ac) {
   return `${warnings.map((x) => `<div class="callout warn">${esc(x)}</div>`).join('')}<div class="page-head"><h1>${liverySvg(acLivery(s, ac), { size: 40 })} <a href="#fleet" class="muted">Fleet ›</a> ${ac.reg}</h1><div class="row">${pill(st.label, st.tone)} <span class="muted">${esc(t.name)}</span></div></div>
   <div class="grid kpis">
     ${kpi('Range', `${int(t.range)} km`, { sub: `needs ${int(t.runway)} m of runway` })}
+    ${G.engineOf(ac) ? kpi('Engines', esc(engineName(ac)), { sub: engineNote(G.engineOf(ac)) || 'baseline', cls: 'small-value' }) : ''}
     ${kpi('Age', `${num(G.ageYears(s, ac), 1)} yrs`)}
     ${kpi('Flight hours', int(ac.fh), { sub: `${int(ac.cycles)} cycles` })}
     ${kpi('Reliability', int(ac.reliability), { cls: ac.reliability < 70 ? 'bad' : '', sub: `Dispatch ${pct(G.dispatchReliability(ac), 1)}` })}
@@ -359,7 +387,14 @@ export const actions = {
   'order-one': (el, ctx) => G.orderAircraft(ctx.game, el.dataset.type, 1),
   'lease-offer': (el, ctx) => G.leaseFromOffer(ctx.game, el.dataset.id),
   'buy-used': (el, ctx) => G.buyUsed(ctx.game, el.dataset.id),
-  order: (el, ctx) => G.orderAircraft(ctx.game, el.dataset.type, Number(formValues(el).qty || 1)),
+  order: (el, ctx) => {
+    const v = formValues(el);
+    return G.orderAircraft(ctx.game, el.dataset.type, Number(v.qty || 1), null, null, { engine: v.engine });
+  },
+  'order-launch': (el, ctx) => {
+    const v = formValues(el);
+    return G.orderAircraft(ctx.game, el.dataset.type, Number(v.qty || 1), null, null, { engine: v.engine, launch: true });
+  },
   'cancel-order': (el, ctx) => (confirm('Cancel this order and forfeit the deposit?') ? G.cancelOrder(ctx.game, el.dataset.id) : null),
   retrofit(el, ctx) {
     const { cfg, cabin } = readCabinForm(el.closest('[data-form]'));

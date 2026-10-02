@@ -1,6 +1,7 @@
 // Market model: origin–destination demand, class mix, reference fares,
 // seasonality, cargo demand, traffic rights, and where rival airlines fly.
 
+import { jvRivalFactor } from './commercial.js';
 import { airportByCode, SINGLE_MARKETS } from '../data/airports.js';
 import { classFareMultiplier } from '../data/aircraft.js';
 import { RIVALS, RIVAL_TYPES, rivalById } from '../data/rivals.js';
@@ -299,6 +300,8 @@ function rivalsOnUncached(state, a, b, k, adj, ctx) {
   // a crowd of them on a big long-haul market must not outweigh the nonstops.
   const conn = connectingWeight(out.filter((e) => !e.nonstop).length);
   for (const e of out) if (!e.nonstop) e.w = conn;
+  // A joint-venture partner coordinates with us instead of competing.
+  if (state.jvs?.length) for (const e of out) e.jv = jvRivalFactor(state, a, b, e.id);
   return out;
 }
 
@@ -339,7 +342,7 @@ export function rivalAppealFast(state, ctx, entry, cls, biz) {
   const ceiling = 1.05 + 0.15 * biz + (cls === 'J' || cls === 'F' ? 0.1 : 0);
   const r = Math.max(0.05, ratio);
   const cliff = r > ceiling ? Math.exp(-(r - ceiling) * 5) : 1;
-  return v.k * Math.min(1.6, entry.cap) * powMemo(ctx, cls, ratio) * cliff * (entry.nonstop ? (v.premium ? 1.4 : 1.2) : 0.45 * (entry.w ?? 1));
+  return v.k * (entry.jv ?? 1) * Math.min(1.6, entry.cap) * powMemo(ctx, cls, ratio) * cliff * (entry.nonstop ? (v.premium ? 1.4 : 1.2) : 0.45 * (entry.w ?? 1));
 }
 
 // How attractive a rival's offer is for one cabin on this pair.
@@ -357,6 +360,7 @@ export function rivalAppeal(state, entry, cls, biz) {
   const rep = 0.5 + (state.rivals[rival.id].rep ?? 60) / 100;
   return (
     partner *
+    (entry.jv ?? 1) *
     rep *
     type.quality *
     rival.quality *

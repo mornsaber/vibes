@@ -3,8 +3,10 @@
 // connections over hubs), compete for passengers and freight cabin by cabin,
 // allocate seats leg by leg, and produce route-level revenue and costs.
 
+import { jvBoost, loyaltyBoost } from './commercial.js';
+import { routeBase, lccOnMainline, REMOTE_PRODUCTIVITY, POSITIONING } from './crew.js';
 import { airportByCode } from '../data/airports.js';
-import { CLASSES, productQ, defaultCabin, familyOf } from '../data/aircraft.js';
+import { CLASSES, productQ, defaultCabin, familyOf, engineOf } from '../data/aircraft.js';
 import { SERVICE, SERVICE_IDS } from '../data/business.js';
 import { rivalById } from '../data/rivals.js';
 import { clamp, sum, distanceKm, randNormal, pairKey, yearOf } from './core.js';
@@ -55,7 +57,7 @@ function partnerBoost(state, a, b, long) {
     if (r && (r.hubs.includes(a) || r.hubs.includes(b))) boost *= 1.12;
   }
   if (state.partners.alliance && long) boost *= 1.08;
-  return boost;
+  return boost * jvBoost(state, a, b);
 }
 
 function emptyStats() {
@@ -192,6 +194,7 @@ export function simulateOperations(state, { fuelPrice, macro }) {
   // 3. Demand capture per itinerary and cabin, split into flexible and
   //    price-sensitive (advance-purchase) travellers.
   const marketing = marketingEffect(state);
+  const loyal = loyaltyBoost(state);
   const rivalCtx = rivalsContext(state);
   for (const f of flows) {
     const A = airportByCode[f.a];
@@ -249,7 +252,7 @@ export function simulateOperations(state, { fuelPrice, macro }) {
       const premium = (c === 'J' || c === 'F') ? (lounge ? 1.06 : 1) * (ka.premium ?? 1) * camp.premium : 1;
       const pq = Math.min(...f.legs.map((l) => l.pq[c] || 1));
       const common = quality * pq * svc * rep * freqEffect(freq) * marketing * boost * connect * premium * terminal * camp.all;
-      const oursF = priceEffect(f.fare[c], ref * flexMult(c, MARKET_SPREAD), c, biz, FLEX_ELASTICITY) * common * (ka.flex ?? 1) * camp.flex;
+      const oursF = priceEffect(f.fare[c], ref * flexMult(c, MARKET_SPREAD), c, biz, FLEX_ELASTICITY) * common * (ka.flex ?? 1) * camp.flex * loyal;
       const oursA = priceEffect(f.fareA[c], ref * advMult(c, MARKET_SPREAD), c, biz, ADV_ELASTICITY) * common * (ka.adv ?? 1) * camp.adv;
       const market = marketNow(state, f.a, f.b) * shares[c] * season * noise;
       const ps = priceSensitiveShare(c, biz);
@@ -339,6 +342,7 @@ export function simulateOperations(state, { fuelPrice, macro }) {
     const bSvc = brandService(state, leg.brand);
     const intl = !sameMarket(A.country, B.country, yearOf(state.week));
     const hubEnds = [route.a, route.b].filter((x) => isHub(state, x)).length;
+    const base = routeBase(state, route);
     for (const k of CLASSES) {
       s.seats[k] = leg.cap[k] * 2;
       s.demand[k] = Math.max(s.demand[k] * 2, s.pax[k]);
@@ -355,14 +359,17 @@ export function simulateOperations(state, { fuelPrice, macro }) {
       const fuelKg = flights * type.burn * route.distance * reroute * fuelFactor(state, ac) * (0.92 + 0.1 * lf);
       s.fuelKg += fuelKg;
       s.cost.fuel += fuelKg * fuelPrice;
-      s.cost.maintenance += hours * MX_HR[mx] * (1 + ageYears(state, ac) * 0.03) * lineMx * (kc.maintenance ?? 1) * (com.mx[familyOf(ac.type)] ?? 1);
+      s.cost.maintenance += hours * MX_HR[mx] * (1 + ageYears(state, ac) * 0.03) * lineMx * (kc.maintenance ?? 1) * (com.mx[familyOf(ac.type)] ?? 1) * (engineOf(ac)?.mx ?? 1);
       s.cost.navigation += flights * route.distance * NAV_KM[mx];
       s.cost.landing += flights * LANDING[mx] * fee;
       const cockpit = type.cockpit ?? cockpitCrew(bh) + (type.fe ? 1 : 0);
-      s.crewHours += hours * (cockpit + cabinCrewPerFlight(ac.config));
-      // Crews overnight away from base when a rotation can't return the same day or no hub is involved.
-      const overnight = !hubEnds || 2 * bh + 1 > 13;
-      if (overnight) s.cost.crewTravel += eff * (cockpit + cabinCrewPerFlight(ac.config)) * 220;
+      const crew = cockpit + cabinCrewPerFlight(ac.config);
+      // Crews positioned in from another base fly fewer productive hours.
+      s.crewHours += hours * crew * (base.remote ? REMOTE_PRODUCTIVITY : 1);
+      // Crews overnight away from base when a rotation can't return the same day or no base is involved.
+      const overnight = base.remote || 2 * bh + 1 > 13;
+      if (overnight) s.cost.crewTravel += eff * crew * 220;
+      if (base.remote) s.cost.crewTravel += flights * crew * POSITIONING;
       if (ac.upgrades.includes('wifi')) s.ancillary += 0.015 * sum(CLASSES, (k) => s.revenue[k]) * (eff / Math.max(s.freq, 1e-9));
     }
     const bhAvg = s.flights ? s.hours / s.flights : 0;
@@ -380,7 +387,9 @@ export function simulateOperations(state, { fuelPrice, macro }) {
     const carbon = carbonCost(state, route, s.fuelKg, s.cost.fuel);
     s.cost.carbon = carbon.total;
     s.co2 = carbon.co2;
-    s.crewFactor = kc.crew ?? 1;
+    // A low-cost brand flies on the mainline crew contract unless scope relief allows its own.
+    s.crewFactor = (leg.brand.kind === 'lcc' && leg.brand.id !== 'main' && lccOnMainline(state) ? 1 : (kc.crew ?? 1)) * base.wage;
+    s.crewBase = base.code;
     const eu = sameMarket('FR', A.country) || sameMarket('FR', B.country) || A.country === 'GB' || B.country === 'GB';
     s.cost.delays = (1 - s.otp) * paxTotal * 14 * (eu ? 3 : 1);
     if (state.partners.codeshares.some((id) => rivalDef(state, id)?.hubs.some((h) => h === route.a || h === route.b))) s.cost.codeshare = ticket * 0.03;

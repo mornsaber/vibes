@@ -23,7 +23,7 @@ full-screen like an app. Saves stay in that browser on that device.
 ```sh
 npm start        # http://localhost:8080
 npm test         # engine test suite (node:test)
-npm run simulate # headless balance harness (scripted strategies; SEED=n)
+npm run simulate # headless balance harness (SEED=n, SEEDS=n for spreads, ONLY=regex)
 npm run profile  # performance harness: ~300 aircraft, 150 routes, 10 years
 ```
 
@@ -41,8 +41,8 @@ Each page is a hash route (`#routes/rt12`, `#fleet/ac/ac3`, `#engineering/schedu
 | Operations | Finance & Strategy |
 | --- | --- |
 | **#dashboard** — Cash · Profit/wk · Load · Fleet, scenario goals, monthly profit, needs attention, advisor (one-click route fixes), operations, fleet by type, network, staffing, upcoming deliveries, board objectives | **#finances** — cash, net/wk, income statement, monthly results, credit rating & metrics, term loans, revolving credit, aircraft-secured loans, leases, fuel hedging, equity |
-| **#routes** — route list, planner, per-route detail: base fares, flex/advance revenue management, summer/winter frequencies, brand, treaty, rivals, economics, cargo, and an aircraft finder (your aircraft that can fly it, and types worth leasing, buying or ordering) | **#management** — airline & board, autopilot, staffing, service & marketing, brands & campaigns, partners (codeshares & alliances), subsidies, statistics (CASK/RASK/yield…) |
-| **#planning** — hubs (timetable banks, terminals), fleet capacity & idle aircraft, crew plan, slots | **#competitors** — 70+ real airlines with finances, hostility and head-to-head routes; buy stakes or acquire (optionally keeping the brand) |
+| **#routes** — route list, planner, per-route detail: base fares, flex/advance revenue management, summer/winter frequencies, brand, treaty, rivals, economics, cargo, and an aircraft finder (your aircraft that can fly it, and types worth leasing, buying or ordering) | **#management** — airline & board, autopilot, staffing, service & marketing, loyalty programme & co-brand cards, brands & campaigns, partners (codeshares, joint ventures, alliances), subsidies, statistics (CASK/RASK/yield…) |
+| **#planning** — hubs (timetable banks, terminals), fleet capacity & idle aircraft, crew plan, crew bases, seniority & scope clauses, slots | **#competitors** — 70+ real airlines with finances, hostility and head-to-head routes; buy stakes or acquire (optionally keeping the brand) |
 | **#fleet** — aircraft (with range), groups, fleet commonality, on order, acquire (leases, used, factory orders), aircraft detail with a route finder, one-click auto-assign and a cabin editor | **#cargo** — overview, network, freighter fleet & P2F conversions |
 | **#map** — world map with regional zoom, airport explorer | **#charter** — sports teams, tour operators, cruise lines, pilgrimages… |
 | **#engineering** — A/B/C/D check schedule, MRO facilities, outsourcing, upgrades, cabin layouts, safety & incident log | **#special** — military airlift, VIP, humanitarian, ACMI, medevac; ventures (pilot academy, third-party MRO, ground handling, simulator centre) |
@@ -72,8 +72,12 @@ Each page is a hash route (`#routes/rt12`, `#fleet/ac/ac3`, `#engineering/schedu
 - **Network flow** — passengers connect over your hubs; seats are allocated leg by leg (nonstops first, connections share the rest); connecting fares are prorated by distance.
 - **Fleet** — 120 types incl. freighters with range and runway limits; cabin layouts constrained by floor units and a certified passenger (exit) limit, with presets (max seats, low-cost, two/three-class, premium), fill-with-economy, fleet-wide refits and a standard layout for new orders; factory orders (1.5–5 year lead times, deposits, volume discounts, delays), operating leases, used market, sale-and-leaseback, P2F conversions, upgrades (Wi-Fi, IFE, seats, engine kits).
 - **Fleet matching** — every aircraft page ranks the routes it can fly (existing and new) by estimated weekly profit from current demand, rival fares and your cost lines; every route page lists the aircraft that suit it. Auto-assign places an aircraft (or all idle ones) on the best route, buying affordable slots or flying fewer frequencies at slot-controlled airports.
+- **Manufacturer deals** — engine choice on types that offered one (LEAP vs GTF, GEnx vs Trent 1000, CF6/PW4000/RB211…) with small fuel and maintenance differences and historical in-service problems (GTF powder-metal inspections 2023–26, Trent 1000 blades 2016–20); mixing engine makes in a family costs spares. Order a type before it enters service as a launch customer (15% extra discount, 10% deposits, first deliveries) and carry the programme risk: delays are revealed about a year before entry into service, with partial compensation. Fleet-wide groundings (a MAX-style one on the 2019 timeline, rare ones for brand-new types) idle aircraft and freeze deliveries while the manufacturer pays part of the cost.
 - **Fleet commonality** — aircraft families (A320 family, 737, E-Jets, ATR…) share pilots, engineers and spares. Each extra family raises pilot (+5%), cabin and engineer requirements and costs $20K/week of overhead; families of 6+ aircraft get cheaper maintenance (−5%, −10% from 12), orphan types of 1–2 aircraft cost 12% more to maintain.
 - **Engineering** — A/B/C/D checks by flight hours and calendar; in-house line stations and heavy hangars with bay limits vs. 12 MRO shops with price/quality/wait; regulator grounding; reliability → dispatch and on-time performance.
+- **Joint ventures** — from 1993, a codeshare or alliance partner from another region can form a revenue-sharing joint venture on long-haul routes between your regions (needs open skies and a 26-week regulatory review). The partner stops competing there, joint sales lift demand 12%, and revenue is pooled and split by capacity share, re-set yearly.
+- **Loyalty** — from 1981 the frequent-flyer level becomes a programme with members, miles and a liability; redemptions cost money and members make flexible travellers stickier. From 1987 banks buy miles for co-brand credit cards (often the airline's most profitable business), and miles can be pre-sold for cash in a crunch.
+- **Crew bases & seniority** — every hub is a crew base; open more at airports you serve. Routes are crewed from a base at either end at that base's local pay; routes touching no base need positioned crews (deadheading, hotels, lower productivity). Bases abroad at lower pay upset the pilots' union. Furloughs go by reverse seniority with recall rights; buying an airline means merging seniority lists (date of hire, staple, or arbitration). Pilots' scope clauses limit regional brands (76 seats, 25% of group flying), keep a low-cost brand on mainline crew contracts, and dispute foreign bases until relief is bought with a pay rise.
 - **People** — five workforces sized from scheduled block hours (augmented long-haul crews, premium-cabin attendants) and a lean head office (10 + 6% of operational staff, plus hubs, brands and routes), training pipelines, regional pay, morale, attrition, unions and strikes.
 - **Traffic rights & slots** — cabotage, EU single market, fifth-freedom permits, bilateral agreements; slot-controlled and congested airports with monthly slot pools.
 - **Finance** — fuel price random walk and hedging, credit rating from leverage/liquidity/coverage, rating-dependent borrowing costs, quarterly tax with loss carry-forward, share price, equity raises and dividends.
@@ -91,15 +95,16 @@ src/engine/   core (rng, calendar), market, fleet, network, maintenance, staff,
               ops (weekly flow simulation), finance, rivals, contracts, safety, events,
               advisor (autopilot), brands (subsidiaries, liveries, campaigns), regulation,
               chronicle (history), scenarios, rivalai (reactive rivals), restructuring
-              (Chapter 11), tutorial, turn (weekly turn, save migration)
+              (Chapter 11), tutorial, fit (route/aircraft finder), commercial (joint ventures,
+              loyalty), oem (manufacturer deals), crew (bases, seniority, scope), turn
 src/ui/       storage.js (save slots), app shell & router, map, shared components, pages/*
 icons/        app icons (icon.svg is the source; PNGs for home screens)
 scripts/      serve.js, simulate.js (balance), profile.js (performance), build-land.js (map data)
 test/         engine tests
 ```
 
-The engine is pure and deterministic per seed; state is plain JSON (save version 7;
-version-4, -5 and -6 saves migrate automatically, and a pre-slots save is adopted into a slot).
+The engine is pure and deterministic per seed; state is plain JSON (save version 8;
+version-4 to -7 saves migrate automatically, and a pre-slots save is adopted into a slot).
 
 ### Performance
 
