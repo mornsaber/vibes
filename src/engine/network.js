@@ -3,9 +3,10 @@
 
 import { airportByCode } from '../data/airports.js';
 import { CLASSES } from '../data/aircraft.js';
-import { clamp, fail, ok, newId, log, money, distanceKm, sum, randInt, yearOf } from './core.js';
+import { clamp, fail, ok, newId, log, money, distanceKm, sum, randInt, yearOf, dateOf } from './core.js';
 import { fareNow, trafficRights, sameMarket, FIFTH_FREEDOM_PERMIT } from './market.js';
 import { typeOf, isFreighter, isDelivered } from './fleet.js';
+import { bilateralCheck } from './regulation.js';
 
 const TURN = { commuter: 0.3, prop: 0.75, sst: 2, turboprop: 0.4, regional: 0.5, narrow: 0.75, wide: 1.5, jumbo: 2, freighter: 1.5 };
 
@@ -13,24 +14,50 @@ export const blockHours = (type, d) => d / type.speed + 0.5;
 export const roundTripHours = (type, d) => 2 * (blockHours(type, d) + TURN[type.cat]);
 export const weeklyHours = (type) => (['wide', 'jumbo', 'freighter'].includes(type.cat) ? 126 : type.cat === 'commuter' ? 100 : 112);
 
+// IATA-style seasons: summer April–October, winter November–March. Schedule
+// entries without a season fly all year.
+export const SEASONS = { summer: 'Summer (Apr–Oct)', winter: 'Winter (Nov–Mar)' };
+export const seasonOf = (week) => {
+  const m = dateOf(week).getUTCMonth();
+  return m >= 3 && m <= 9 ? 'summer' : 'winter';
+};
+export const inSeason = (entry, season) => !entry.season || entry.season === 'all' || entry.season === season;
+export const activeSchedule = (state, ac, season = seasonOf(state.week)) => ac.schedule.filter((e) => inSeason(e, season));
+export const isSeasonal = (ac) => ac.schedule.some((e) => e.season && e.season !== 'all');
+
+// Waiting for connection banks costs aircraft time at disciplined banked hubs.
+export function bankPenalty(state, ac) {
+  let worst = 0;
+  for (const e of ac.schedule) {
+    const r = state.routes.find((x) => x.id === e.routeId);
+    if (!r) continue;
+    for (const h of state.hubs) if (h.banks && (h.code === r.a || h.code === r.b)) worst = Math.max(worst, 0.06 * h.discipline);
+  }
+  return worst;
+}
+
 export function availableHours(state, ac) {
-  return Math.max(0, weeklyHours(typeOf(ac)) - ac.lostHours - (ac.contractHours || 0));
+  return Math.max(0, weeklyHours(typeOf(ac)) * (1 - bankPenalty(state, ac)) - ac.lostHours - (ac.contractHours || 0));
 }
 
-export function scheduledHours(state, ac) {
-  return sum(ac.schedule, (s) => {
-    const r = state.routes.find((x) => x.id === s.routeId);
-    return r ? s.freq * roundTripHours(typeOf(ac), r.distance) : 0;
-  });
+const entryHours = (state, ac, e) => {
+  const r = state.routes.find((x) => x.id === e.routeId);
+  return r ? e.freq * roundTripHours(typeOf(ac), r.distance) : 0;
+};
+// Hours in one season, or (no season) the busier of the two — the binding constraint.
+export function scheduledHours(state, ac, season) {
+  if (season) return sum(activeSchedule(state, ac, season), (e) => entryHours(state, ac, e));
+  return Math.max(scheduledHours(state, ac, 'summer'), scheduledHours(state, ac, 'winter'));
 }
 
-export function utilization(state, ac) {
+export function utilization(state, ac, season = seasonOf(state.week)) {
   const total = weeklyHours(typeOf(ac));
-  return (scheduledHours(state, ac) + (ac.contractHours || 0)) / total;
+  return (scheduledHours(state, ac, season) + (ac.contractHours || 0)) / total;
 }
 
 export const routeById = (state, id) => state.routes.find((r) => r.id === id);
-export const routeFreq = (state, route) => sum(state.fleet, (ac) => sum(ac.schedule.filter((s) => s.routeId === route.id), (s) => s.freq));
+export const routeFreq = (state, route, season = seasonOf(state.week)) => sum(state.fleet, (ac) => sum(activeSchedule(state, ac, season).filter((s) => s.routeId === route.id), (s) => s.freq));
+export const peakFreq = (state, route) => Math.max(routeFreq(state, route, 'summer'), routeFreq(state, route, 'winter'));
 export const routeAircraft = (state, route) => state.fleet.filter((ac) => ac.schedule.some((s) => s.routeId === route.id));
 
 export function stations(state) {
@@ -122,8 +149,10 @@ export const priceIndex = (state, route) => route.fares.Y / fareNow(state, route
 
 export const SLOT_PRICE = { 1: 400e3, 2: 3e6 };
 
+// Slots are held for the busier season.
 export function slotUse(state, code) {
-  return sum(state.routes.filter((r) => r.a === code || r.b === code), (r) => routeFreq(state, r));
+  const at = state.routes.filter((r) => r.a === code || r.b === code);
+  return Math.max(sum(at, (r) => routeFreq(state, r, 'summer')), sum(at, (r) => routeFreq(state, r, 'winter')));
 }
 
 export function slotInfo(state, code) {
@@ -186,44 +215,78 @@ export function canOperate(state, ac, route) {
   return ok();
 }
 
-export function maxFrequency(state, ac, route) {
+export function maxFrequency(state, ac, route, season = 'all') {
   const type = typeOf(ac);
-  const current = ac.schedule.find((s) => s.routeId === route.id)?.freq ?? 0;
-  const free = availableHours(state, ac) - scheduledHours(state, ac) + current * roundTripHours(type, route.distance);
-  return Math.max(0, Math.floor(free / roundTripHours(type, route.distance)));
+  const rt = roundTripHours(type, route.distance);
+  let free = Infinity;
+  for (const se of season === 'all' ? ['summer', 'winter'] : [season]) {
+    const other = sum(activeSchedule(state, ac, se).filter((e) => e.routeId !== route.id), (e) => entryHours(state, ac, e));
+    free = Math.min(free, availableHours(state, ac) - other);
+  }
+  return Math.max(0, Math.floor(free / rt));
 }
 
-export function setFrequency(state, acId, routeId, freq, { autoSlots = true } = {}) {
+// Frequency of one aircraft on a route for a season ('all' = year-round).
+export function entryFreq(ac, routeId, season = 'all') {
+  const list = ac.schedule.filter((e) => e.routeId === routeId);
+  if (season === 'all') return list.find((e) => !e.season || e.season === 'all')?.freq ?? Math.max(0, ...list.map((e) => e.freq));
+  return list.find((e) => inSeason(e, season))?.freq ?? 0;
+}
+
+function applyEntry(ac, routeId, freq, season) {
+  const mine = ac.schedule.filter((e) => e.routeId === routeId);
+  ac.schedule = ac.schedule.filter((e) => e.routeId !== routeId);
+  if (season === 'all') {
+    if (freq > 0) ac.schedule.push({ routeId, freq });
+    return;
+  }
+  const by = { summer: 0, winter: 0 };
+  for (const e of mine) for (const se of ['summer', 'winter']) if (inSeason(e, se)) by[se] = e.freq;
+  by[season] = freq;
+  if (by.summer === by.winter) {
+    if (by.summer > 0) ac.schedule.push({ routeId, freq: by.summer });
+    return;
+  }
+  for (const se of ['summer', 'winter']) if (by[se] > 0) ac.schedule.push({ routeId, freq: by[se], season: se });
+}
+
+export function setFrequency(state, acId, routeId, freq, { autoSlots = true, season = 'all' } = {}) {
   const ac = state.fleet.find((a) => a.id === acId);
   const route = routeById(state, routeId);
   if (!ac || !route) return fail('Invalid aircraft or route');
+  if (!['all', 'summer', 'winter'].includes(season)) return fail('Unknown season');
   freq = Math.max(0, Math.round(Number(freq) || 0));
-  const entry = ac.schedule.find((s) => s.routeId === routeId);
-  const current = entry?.freq ?? 0;
   if (freq === 0) {
-    ac.schedule = ac.schedule.filter((s) => s.routeId !== routeId);
+    applyEntry(ac, routeId, 0, season);
     return ok();
   }
   const can = canOperate(state, ac, route);
   if (!can.ok) return can;
-  const max = maxFrequency(state, ac, route);
+  const max = maxFrequency(state, ac, route, season);
   if (freq > max) return fail(`${ac.reg} only has time for ${max} round trips a week on this route`);
-  // Slots for any added frequencies.
-  const delta = freq - current;
+  const before = ac.schedule.map((e) => ({ ...e }));
+  const peakBefore = peakFreq(state, route);
+  applyEntry(ac, routeId, freq, season);
+  const delta = peakFreq(state, route) - peakBefore;
+  const undo = (res) => {
+    ac.schedule = before;
+    return res;
+  };
   if (delta > 0) {
+    const treaty = bilateralCheck(state, route, delta);
+    if (!treaty.ok) return undo(treaty);
+    // Slots for any added frequencies.
     for (const code of [route.a, route.b]) {
       const info = slotInfo(state, code);
       if (!info) continue;
-      const short = info.used + delta - info.held;
+      const short = info.used - info.held;
       if (short > 0) {
-        if (!autoSlots) return fail(`Need ${short} more slot pair(s) at ${code}`);
+        if (!autoSlots) return undo(fail(`Need ${short} more slot pair(s) at ${code}`));
         const res = buySlots(state, code, short);
-        if (!res.ok) return fail(`Slots: ${res.error}`);
+        if (!res.ok) return undo(fail(`Slots: ${res.error}`));
       }
     }
   }
-  if (entry) entry.freq = freq;
-  else ac.schedule.push({ routeId, freq });
   return ok();
 }
 
@@ -246,15 +309,19 @@ export function clearSchedule(state, acId) {
 }
 
 // Weekly seats each way by cabin, plus cargo kg, for a route (planned).
-export function routeCapacity(state, route, { operating = false } = {}) {
+export const cargoCapacity = (ac) => {
+  const type = typeOf(ac);
+  return type.cargoT * 1000 * (isFreighter(type) ? 1 : 0.6) + (ac.config.C || 0) * 1000;
+};
+
+export function routeCapacity(state, route, { operating = false, season = seasonOf(state.week) } = {}) {
   const cap = { F: 0, J: 0, W: 0, Y: 0, C: 0 };
   for (const ac of state.fleet) {
     if (operating && !isDelivered(state, ac)) continue;
-    for (const s of ac.schedule) {
+    for (const s of activeSchedule(state, ac, season)) {
       if (s.routeId !== route.id) continue;
-      const type = typeOf(ac);
       for (const c of CLASSES) cap[c] += s.freq * (ac.config[c] || 0);
-      cap.C += s.freq * type.cargoT * 1000 * (isFreighter(type) ? 1 : 0.6);
+      cap.C += s.freq * cargoCapacity(ac);
     }
   }
   return cap;
@@ -268,32 +335,125 @@ export function hubOpenCost(code) {
   return 4e6 + ap.tier * 2e6 + ap.slots * 4e6;
 }
 
+export const newHub = (code, week) => ({ code, openedWeek: week, banks: 0, autoBanks: true, discipline: 0.6, lounge: false, facilities: {}, terminal: 0, terminalBuild: null });
+
 export function openHub(state, code) {
   const ap = airportByCode[code];
   if (!ap) return fail('Unknown airport');
   if (isHub(state, code)) return fail('Already a hub');
-  if (!sameMarket(state.airline.home, ap.country)) return fail('Hubs must be in your home market');
+  if (!sameMarket(state.airline.home, ap.country, yearOf(state.week))) return fail('Hubs must be in your home market');
   const cost = hubOpenCost(code);
   if (state.cash < cost) return fail(`Opening a hub at ${code} costs ${money(cost)}`);
   state.cash -= cost;
   state.ledgerCapex.facilities += cost;
-  state.hubs.push({ code, openedWeek: state.week, bank: 1, lounge: false, facilities: {} });
+  state.hubs.push(newHub(code, state.week));
   if (ap.slots) state.slots[code] = { held: (state.slots[code]?.held ?? 0) + (ap.slots === 2 ? 14 : 35), pool: Math.max(state.slots[code]?.pool ?? 0, ap.slots === 2 ? 6 : 60) };
   log(state, `${ap.city} (${code}) is now a hub. Crews can be based here and passengers can connect.`, 'good', 'network');
   return ok();
 }
 
-export function upgradeHubBank(state, code) {
+// ---------------------------------------------------------------------------
+// Hub timetables: rolling (flights spread through the day) or connection
+// banks (waves of arrivals then departures). Banks make connections quick and
+// reliable when every spoke has a flight in each wave, at the cost of
+// aircraft waiting time and peak congestion.
+
+export const MAX_BANKS = 6;
+export const RETIME_COST = 250e3;
+
+// Weekly round trips at a hub (all spokes).
+export const hubDepartures = (state, code) => sum(state.routes.filter((r) => r.a === code || r.b === code), (r) => r.last?.freq ?? routeFreq(state, r));
+
+// Quality multiplier of a connection between two spokes with fA/fB weekly round trips.
+export function hubConnectionQuality(hub, fA, fB, hubWeekly = 0) {
+  if (!hub.banks) return 0.72 + 0.14 * Math.min(1, hubWeekly / 7 / 60);
+  const daily = Math.min(fA, fB) / 7;
+  const fill = Math.min(1, (daily * 2) / hub.banks) ** 0.5;
+  return 0.74 + 0.36 * (0.55 + 0.45 * hub.discipline) * fill + 0.02 * Math.min(hub.banks, daily);
+}
+
+// The bank count a scheduler would pick: one wave per daily frequency of a typical spoke.
+export function suggestedBanks(state, code) {
+  const spokes = state.routes.filter((r) => r.a === code || r.b === code);
+  if (spokes.length < 4) return 0;
+  const daily = sum(spokes, (r) => routeFreq(state, r)) / spokes.length / 7;
+  return clamp(Math.round(daily), 2, MAX_BANKS);
+}
+
+export function setHubTimetable(state, code, { banks, discipline, auto } = {}) {
   const hub = state.hubs.find((h) => h.code === code);
   if (!hub) return fail('Not a hub');
-  if (hub.bank >= 3) return fail('Already at the best connection structure');
-  const cost = hub.bank === 1 ? 3e6 : 8e6;
-  if (state.cash < cost) return fail(`Costs ${money(cost)}`);
+  if (auto != null) hub.autoBanks = !!auto;
+  if (discipline != null) hub.discipline = clamp(Number(discipline), 0, 1);
+  if (banks != null) {
+    banks = clamp(Math.round(Number(banks)), 0, MAX_BANKS);
+    hub.autoBanks = false;
+    if (banks !== hub.banks) {
+      if (state.cash < RETIME_COST) return fail(`Re-timing the hub costs ${money(RETIME_COST)}`);
+      state.cash -= RETIME_COST;
+      state.ledgerCapex.other += RETIME_COST;
+      hub.banks = banks;
+      log(state, `${code} re-timed to ${banks ? `${banks} connection banks a day` : 'a rolling schedule'}.`, 'info', 'network');
+    }
+  }
+  return ok();
+}
+
+// Monthly: hubs on auto follow the suggested bank structure.
+export function autoBankTick(state) {
+  for (const hub of state.hubs) {
+    if (!hub.autoBanks) continue;
+    const want = suggestedBanks(state, hub.code);
+    if (want !== hub.banks) {
+      hub.banks = want;
+      log(state, `Network planning re-timed ${hub.code} to ${want ? `${want} daily banks` : 'a rolling schedule'}.`, 'info', 'network');
+    }
+  }
+}
+
+export const hubWeeklyCost = (hub) => 60e3 + (hub.lounge ? 40e3 : 0) + hub.banks * 8e3 * (0.5 + hub.discipline) + (hub.terminal ?? 0) * 50e3;
+
+// ---------------------------------------------------------------------------
+// Terminal investment at hubs: cheaper handling, more slots, better appeal.
+
+export const TERMINALS = [
+  null,
+  { name: 'Dedicated pier', cost: 40e6, weeks: 52 },
+  { name: 'Own terminal', cost: 120e6, weeks: 78 },
+  { name: 'Signature terminal', cost: 300e6, weeks: 104 },
+];
+export const TERMINAL_EFFECT = { fees: 0.08, slots: 15, appeal: 0.025, otp: 0.015 };
+export const terminalLevel = (state, code) => state.hubs.find((h) => h.code === code)?.terminal ?? 0;
+export function terminalCost(code, level) {
+  const ap = airportByCode[code];
+  return TERMINALS[level].cost * (0.7 + 0.15 * ap.tier) * (ap.slots === 2 ? 1.4 : 1);
+}
+
+export function buildTerminal(state, code) {
+  const hub = state.hubs.find((h) => h.code === code);
+  if (!hub) return fail('Terminals can only be built at hubs');
+  if (hub.terminalBuild) return fail('Construction already under way');
+  const level = (hub.terminal ?? 0) + 1;
+  if (!TERMINALS[level]) return fail('Already a signature terminal');
+  const cost = terminalCost(code, level);
+  if (state.cash < cost) return fail(`${TERMINALS[level].name} at ${code} costs ${money(cost)}`);
   state.cash -= cost;
   state.ledgerCapex.facilities += cost;
-  hub.bank += 1;
-  log(state, `${code} hub upgraded to ${['', 'basic', 'banked', 'wave-optimised'][hub.bank]} connections.`, 'good', 'network');
+  hub.terminalBuild = { level, readyWeek: state.week + TERMINALS[level].weeks };
+  log(state, `Construction starts on a ${TERMINALS[level].name.toLowerCase()} at ${code} (${money(cost)}, ${TERMINALS[level].weeks} weeks).`, 'info', 'network');
   return ok();
+}
+
+export function terminalTick(state) {
+  for (const hub of state.hubs) {
+    const b = hub.terminalBuild;
+    if (!b || b.readyWeek > state.week) continue;
+    hub.terminal = b.level;
+    hub.terminalBuild = null;
+    const info = slotInfo(state, hub.code);
+    if (info) state.slots[hub.code].held += TERMINAL_EFFECT.slots;
+    log(state, `${TERMINALS[b.level].name} opens at ${hub.code}: lower charges${info ? `, ${TERMINAL_EFFECT.slots} extra slot pairs` : ''} and a better passenger experience.`, 'good', 'network');
+  }
 }
 
 export function buildLounge(state, code) {
@@ -308,5 +468,3 @@ export function buildLounge(state, code) {
   log(state, `Opened a premium lounge at ${code}.`, 'good', 'network');
   return ok();
 }
-
-export const BANK_QUALITY = [0, 0.85, 1.0, 1.12];

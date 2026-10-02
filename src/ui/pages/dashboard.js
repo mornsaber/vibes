@@ -71,17 +71,19 @@ export function render({ state: s }) {
   const headcount = G.headcount(s);
 
   return `
-  <div class="page-head"><h1>Dashboard</h1><span class="muted">${esc(s.airline.slogan || `${s.airline.homeName}'s newest airline`)}</span></div>
+  <div class="page-head"><h1>Dashboard</h1><span class="muted">${esc(s.airline.slogan || (s.scenario ? `Scenario: ${s.scenario.name}` : `${s.airline.homeName}'s newest airline`))}</span></div>
   <div class="grid kpis">
     ${kpi('Cash', money(s.cash), { href: '#finances', cls: s.cash < 0 ? 'bad' : '', sub: `Rating ${s.finance.rating}` })}
     ${kpi('Profit / week', money(r?.profit ?? 0), { href: '#finances', cls: (r?.profit ?? 0) < 0 ? 'bad' : 'good', sub: `Revenue ${money(r?.totalRevenue ?? 0)}` })}
     ${kpi('Load factor', r ? pct(r.lf) : '–', { href: '#routes', sub: `${int(r?.pax ?? 0)} pax last week` })}
     ${kpi('Fleet', String(s.fleet.length), { href: '#fleet', sub: `${s.orders.length} on order` })}
   </div>
+  ${s.scenario ? scenarioPanel(s) : ''}
   <div class="grid cols-2">
     ${panel('Monthly profit', barChart(monthly, { href: '#finances' }), { href: '#finances' })}
     ${panel('Needs attention', list.length ? `<ul class="issues">${list.slice(0, 12).map((i) => `<li class="${i.level}"><a href="${i.href}">${esc(i.text)}</a></li>`).join('')}</ul>` : '<p class="good">All clear. Operations are running smoothly.</p>')}
   </div>
+  ${advisorPanel(s)}
   <div class="grid cols-3">
     ${panel('Operations', `<div class="mini-stats">
       <div><label>Flights / wk</label><b>${int(r?.flights ?? 0)}</b></div>
@@ -112,6 +114,25 @@ export function render({ state: s }) {
     ${panel('News', `<ul class="news">${s.log.slice(0, 10).map((n) => `<li class="${n.tone}"><span class="when">${G.dateLabel(n.week)}</span><span>${esc(n.text)}</span></li>`).join('')}</ul>`)}
   </div>`;
 }
+
+function scenarioPanel(s) {
+  const goals = G.scenarioGoals(s);
+  const left = Math.max(0, s.scenario.deadlineWeek - s.week);
+  return panel(`Scenario: ${s.scenario.name}`, `<ul class="plain goals">${goals.map((g) => `<li>${g.met ? pill('Done', 'good') : g.now ? pill(g.final ? 'On track' : 'Done', 'good') : pill('Open', 'warn')} ${esc(g.label)}${g.final ? ' <small class="muted">(judged at the deadline)</small>' : ''}</li>`).join('')}</ul>
+    <p class="muted small">Deadline ${G.dateLabel(s.scenario.deadlineWeek)} — ${(left / 52).toFixed(1)} years left. Status: ${esc(s.scenario.status)}.</p>`, { cls: 'scenario' });
+}
+
+function advisorPanel(s) {
+  const advice = G.adviseRoutes(s).slice(0, 6);
+  const ap = s.autopilot ?? {};
+  const mode = [ap.pricing && 'pricing', ap.fleet && 'fleet assignment'].filter(Boolean).join(' & ');
+  return panel('Advisor', `${advice.length ? `<ul class="advice">${advice.map((a) => `<li class="${a.tone}"><span><a href="#routes/${a.routeId}">${esc(a.text)}</a></span>${a.label ? `<button class="small" data-action="apply-advice" data-route="${a.routeId}" data-kind="${a.kind}">${esc(a.label)}</button>` : ''}</li>`).join('')}</ul>` : '<p class="good">No route needs attention right now.</p>'}
+    <p class="muted small">Autopilot: ${mode ? `handling ${mode}` : 'off'} · target load ${pct(ap.targetLF ?? 0.84)}. <a href="#management/autopilot">Settings ›</a></p>`);
+}
+
+export const actions = {
+  'apply-advice': (el, ctx) => G.applyAdvice(ctx.game, el.dataset.route, el.dataset.kind),
+};
 
 function mapView(s) {
   const region = G.airportByCode[s.hubs[0].code].region;

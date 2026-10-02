@@ -1,14 +1,14 @@
-import { G, esc, money, pct, int, num, kpi, panel, table, tabs, statement, options, bar, pill, ap, tonnes, usd, nominal, fromNominal } from '../util.js';
+import { G, esc, money, pct, int, num, kpi, panel, table, tabs, statement, options, bar, pill, ap, tonnes, usd, nominal, fromNominal, liverySvg, signed } from '../util.js';
 import { formValues } from '../app.js';
 import { hubsPanel } from './planning.js';
 import { settingsEditor, parseSetting } from './start.js';
 import { render as cargoRender } from './cargo.js';
 
-const TABS = [['airline', 'Airline'], ['subsidies', 'Subsidies'], ['stats', 'Statistics'], ['hubs', 'Hubs'], ['service', 'Service standards'], ['codeshare', 'Codeshare & alliances'], ['staffing', 'Staffing'], ['cargo', 'Cargo']];
+const TABS = [['airline', 'Airline'], ['autopilot', 'Autopilot'], ['brands', 'Subsidiaries'], ['branding', 'Brand & campaigns'], ['subsidies', 'Subsidies'], ['stats', 'Statistics'], ['hubs', 'Hubs'], ['service', 'Service standards'], ['codeshare', 'Codeshare & alliances'], ['staffing', 'Staffing'], ['cargo', 'Cargo']];
 
 export function render(c) {
   const tab = c.params[0] ?? 'airline';
-  const body = { airline, subsidies, stats, hubs: (x) => hubsPanel(x.state), service, codeshare, staffing, cargo: (x) => cargoRender({ ...x, params: ['overview'] }, true) }[tab] ?? airline;
+  const body = { airline, autopilot, brands, branding, subsidies, stats, hubs: (x) => hubsPanel(x.state), service, codeshare, staffing, cargo: (x) => cargoRender({ ...x, params: ['overview'] }, true) }[tab] ?? airline;
   return `<div class="page-head"><h1>Management</h1></div>${tabs('management', TABS, tab)}${body(c)}`;
 }
 
@@ -35,6 +35,90 @@ function airline(c) {
       { h: 'Now', v: (o) => esc(G.objectiveProgress(s, o).value) },
       { h: '', v: (o) => (G.objectiveProgress(s, o).met ? pill('Met', 'good') : pill('Open', 'warn')) },
     ])}<p class="muted small">Each objective met at year end adds 7 confidence; each missed costs 6.</p>`)}
+  </div>`;
+}
+
+function autopilot(c) {
+  const s = c.state;
+  const ap = s.autopilot ?? G.defaultAutopilot();
+  const manual = s.routes.filter((r) => r.autoPrice === false);
+  const toggle = (k, label, desc) => `<label class="check"><input type="checkbox" data-change="autopilot" data-key="${k}" ${ap[k] ? 'checked' : ''}> <b>${label}</b> <small class="muted">${desc}</small></label>`;
+  return `<div class="grid cols-2">
+    ${panel('Autopilot', `<div class="stack">
+      ${toggle('pricing', 'Auto-pricing', 'Each week, nudge fares on every route toward the target load factor (within 80–160% of the brand’s normal level).')}
+      ${toggle('rm', 'Revenue management', 'Open the advance-purchase bucket when planes run empty; close it to protect seats for flexible buyers when they fill.')}
+      ${toggle('fleet', 'Fleet assignment', 'Put idle aircraft on the routes turning away the most passengers, and top up full routes with spare hours.')}
+      <div class="field"><label>Target load factor: <b>${pct(ap.targetLF)}</b></label><input type="range" min="0.65" max="0.95" step="0.01" value="${ap.targetLF}" data-change="autopilot-lf"><small class="muted">Higher fills more seats at lower fares; lower holds yield but spills more passengers.</small></div>
+    </div>`)}
+    ${panel('Routes priced by hand', `${table(manual, [
+      { h: 'Route', v: (r) => `<a href="#routes/${r.id}">${r.a}–${r.b}</a>` },
+      { h: 'Price level', cls: 'num', v: (r) => pct(G.priceIndex(s, r)) },
+      { h: 'Load', cls: 'num', v: (r) => (r.last?.seatTotal ? pct(r.last.lf) : '–') },
+      { h: '', v: (r) => `<button class="small" data-action="route-auto" data-id="${r.id}">Hand back to autopilot</button>` },
+    ], { empty: 'Every route follows the autopilot. Setting fares on a route page takes it off auto-pricing.' })}`)}
+  </div>
+  ${panel('Advisor suggestions', table(G.adviseRoutes(s), [
+    { h: 'Route', v: (a) => `<a href="#routes/${a.routeId}">${a.route}</a>` },
+    { h: 'Finding', v: (a) => `<span class="${a.tone}">${esc(a.text)}</span>` },
+    { h: '', v: (a) => (a.label ? `<button class="small" data-action="apply-advice" data-route="${a.routeId}" data-kind="${a.kind}">${esc(a.label)}</button>` : '') },
+  ], { empty: 'Nothing to suggest — the network looks healthy.' }))}`;
+}
+
+const kindOptions = Object.entries(G.BRAND_KINDS).filter(([k]) => k !== 'main').map(([k, v]) => [k, v.label]);
+
+function brands(c) {
+  const s = c.state;
+  const results = G.brandResults(s);
+  return `${panel('Group brands', table(results, [
+    { h: '', v: (r) => liverySvg(r.brand.livery, { size: 28 }) },
+    { h: 'Brand', v: (r) => `<b>${esc(r.brand.name)}</b> <small class="muted">${esc(r.brand.code)}</small><br><small class="muted">${esc(G.brandKind(r.brand).label)}</small>` },
+    { h: 'Routes', cls: 'num', v: (r) => r.routes },
+    { h: 'Pax/wk', cls: 'num', v: (r) => int(r.pax) },
+    { h: 'Load', cls: 'num', v: (r) => (r.seats ? pct(r.lf) : '–') },
+    { h: 'Revenue/wk', cls: 'num', v: (r) => money(r.revenue) },
+    { h: 'Route profit/wk', cls: 'num', v: (r) => signed(r.profit) },
+    { h: 'Reputation', v: (r) => `${bar(r.rep, 100)} ${int(r.rep)}` },
+    { h: '', v: (r) => (r.brand.id === 'main' ? '' : `<button class="small danger" data-action="close-brand" data-id="${r.brand.id}">Fold in</button>`) },
+  ]))}
+  <div class="grid cols-2">
+    ${panel('Launch a brand', `<div class="stack" data-form>
+      <div class="grid cols-2 tight"><div class="field"><label>Name</label><input name="name" placeholder="e.g. ${esc(s.airline.name.split(' ')[0])} Express" maxlength="28"></div>
+      <div class="field"><label>Code</label><input name="code" maxlength="2" placeholder="XX"></div></div>
+      <div class="grid cols-2 tight"><div class="field"><label>Type</label><select name="kind">${options(kindOptions, 'lcc')}</select></div>
+      <div class="field"><label>Colour</label><input type="color" name="color" value="#f5a524"></div></div>
+      <button class="primary" data-action="launch-brand">Launch (${money(G.BRAND_LAUNCH_COST)} + ${money(G.BRAND_WEEKLY)}/wk)</button>
+    </div>
+    <ul class="plain small">${kindOptions.map(([k, l]) => `<li><b>${esc(l)}</b> — ${esc(G.BRAND_KINDS[k].desc)}</li>`).join('')}</ul>`)}
+    ${panel('Assign routes', `${table(s.routes, [
+      { h: 'Route', v: (r) => `<a href="#routes/${r.id}">${r.a}–${r.b}</a> <small class="muted">${int(r.distance)} km</small>` },
+      { h: 'Profit/wk', cls: 'num', v: (r) => signed(r.last?.profit ?? 0) },
+      { h: 'Brand', v: (r) => `<select data-change="route-brand" data-id="${r.id}">${options(G.brands(s).map((b) => [b.id, b.name]), r.brand ?? 'main')}</select>` },
+    ], { empty: 'No routes yet.' })}<p class="muted small">Moving a route resets its fares to the brand’s normal price level. Acquired airlines can be kept as subsidiaries from the Competitors page.</p>`)}
+  </div>`;
+}
+
+function branding(c) {
+  const s = c.state;
+  const list = G.brands(s);
+  const sel = G.brandById(s, c.ui.brandSel ?? 'main');
+  const l = sel.livery;
+  const relaunch = (s.campaigns ?? []).some((x) => x.id === 'relaunch' && (x.brand ?? 'main') === sel.id);
+  return `<div class="row wrap">${list.map((b) => `<button class="small ${b.id === sel.id ? 'primary' : ''}" data-action="brand-sel" data-id="${b.id}">${esc(b.name)}</button>`).join('')}</div>
+  <div class="grid cols-2">
+    ${panel(`${sel.name}: livery`, `<div class="livery-editor" data-form>
+      <div class="livery-preview">${liverySvg(l, { size: 120, title: sel.name })}</div>
+      <div class="stack">
+        <div class="field"><label>Pattern</label><select name="pattern">${options(Object.entries(G.LIVERY_PATTERNS), l.pattern)}</select></div>
+        <div class="grid cols-2 tight"><div class="field"><label>Tail colour</label><input type="color" name="color" value="${esc(l.color)}"></div><div class="field"><label>Accent</label><input type="color" name="color2" value="${esc(l.color2)}"></div></div>
+        <div class="field"><label>Logo</label><div class="row wrap">${G.LOGOS.map((g) => `<label class="logo-pick"><input type="radio" name="logo" value="${esc(g)}" ${g === l.logo ? 'checked' : ''}><span>${esc(g)}</span></label>`).join('')}</div></div>
+        <button class="primary" data-action="save-livery" data-id="${sel.id}">${relaunch ? 'Apply new livery (free during relaunch)' : `Repaint the fleet (${money(G.repaintCost(s, G.typeOf) * (sel.id === 'main' ? 1 : 0.3))})`}</button>
+      </div></div>`)}
+    ${panel(`${sel.name}: campaigns`, `${table(Object.entries(G.CAMPAIGNS), [
+      { h: 'Campaign', v: ([, x]) => `<b>${esc(x.name)}</b><br><small class="muted">${esc(x.desc)}</small>` },
+      { h: 'Weeks', cls: 'num', v: ([, x]) => x.weeks },
+      { h: 'Cost', cls: 'num', v: ([k]) => money(G.campaignCost(s, k)) },
+      { h: '', v: ([k]) => { const run = (s.campaigns ?? []).find((x) => x.id === k && (x.brand ?? 'main') === sel.id); return run ? pill(`${run.weeksLeft} wk left`, 'good') : `<button class="small" data-action="campaign" data-id="${k}" data-brand="${sel.id}">Launch</button>`; } },
+    ])}<p class="muted small">Campaigns stack with the weekly marketing budget (Service standards). Costs scale with network size.</p>`)}
   </div>`;
 }
 
@@ -258,6 +342,7 @@ export const actions = {
     a.name = v.name.trim() || a.name;
     a.code = (v.code || a.code).toUpperCase().replace(/[^A-Z0-9]/g, '').padEnd(2, 'X').slice(0, 2);
     a.color = v.color || a.color;
+    if (a.livery) a.livery.color = a.color;
     a.slogan = v.slogan.trim();
     return { ok: true, message: 'Airline updated.' };
   },
@@ -281,6 +366,19 @@ export const actions = {
   promote: (el, ctx) => G.promote(ctx.game, el.dataset.role, Number(el.dataset.g), formValues(el).n),
   demote: (el, ctx) => (confirm('Demote? Some will resign and morale will suffer.') ? G.demote(ctx.game, el.dataset.role, Number(el.dataset.g), formValues(el).n) : null),
   'hr-policy': (el, ctx) => G.setHrPolicy(ctx.game, el.dataset.p),
+  'route-auto': (el, ctx) => G.setRouteRm(ctx.game, el.dataset.id, { autoPrice: true }),
+  'launch-brand'(el, ctx) {
+    const v = formValues(el);
+    return G.launchBrand(ctx.game, { name: v.name, code: v.code, kind: v.kind, color: v.color });
+  },
+  'close-brand': (el, ctx) => (confirm('Fold this brand back into the mainline? Its routes move to the main brand.') ? G.closeBrand(ctx.game, el.dataset.id) : null),
+  'brand-sel': (el, ctx) => (ctx.ui.brandSel = el.dataset.id),
+  'save-livery'(el, ctx) {
+    const v = formValues(el);
+    const logo = el.closest('[data-form]').querySelector('[name=logo]:checked')?.value;
+    return G.setLivery(ctx.game, el.dataset.id, { pattern: v.pattern, color: v.color, color2: v.color2, logo }, G.typeOf);
+  },
+  campaign: (el, ctx) => G.startCampaign(ctx.game, el.dataset.id, el.dataset.brand),
 };
 
 export const changes = {
@@ -295,4 +393,7 @@ export const changes = {
   'auto-promote': (el, ctx) => G.setAutoPromote(ctx.game, el.dataset.role, el.checked),
   delegate: (el, ctx) => G.setDelegated(ctx.game, el.dataset.role, el.checked),
   'contract-share': (el, ctx) => G.setContractShare(ctx.game, el.dataset.role, Number(el.value)),
+  autopilot: (el, ctx) => G.setAutopilot(ctx.game, { [el.dataset.key]: el.checked }),
+  'autopilot-lf': (el, ctx) => G.setAutopilot(ctx.game, { targetLF: Number(el.value) }),
+  'route-brand': (el, ctx) => G.setRouteBrand(ctx.game, el.dataset.id, el.value),
 };

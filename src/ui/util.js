@@ -140,3 +140,26 @@ export function checkCell(state, ac, check) {
   const cls = s.critical ? 'bad' : s.overdue ? 'bad' : s.due ? 'warn' : '';
   return `<span class="${cls}" title="${Math.round(s.ratio * 100)}% of interval used">${s.weeksLeft <= 0 ? 'Due' : `${s.weeksLeft}w`}</span>`;
 }
+
+// Tail-fin livery illustration. livery: { pattern, color, color2, logo }.
+export function liverySvg(livery, { size = 34, title = '' } = {}) {
+  const l = { pattern: 'stripe', color: '#4da3ff', color2: '#ffffff', logo: '✈', ...(livery ?? {}) };
+  const c = esc(l.color);
+  const c2 = esc(l.color2);
+  const fin = 'M8,44 L22,4 L38,4 L32,44 Z';
+  const art = {
+    solid: '',
+    stripe: `<path d="M12,36 L40,30 L40,35 L11,41 Z" fill="${c2}"/>`,
+    split: `<path d="M22,4 L38,4 L35,22 L16,22 Z" fill="${c2}"/>`,
+    band: `<path d="M14,30 L32,4 L38,4 L18,40 Z" fill="${c2}"/>`,
+    dots: `<circle cx="27" cy="14" r="2.4" fill="${c2}"/><circle cx="21" cy="25" r="2.4" fill="${c2}"/><circle cx="30" cy="31" r="2.4" fill="${c2}"/><circle cx="16" cy="37" r="2" fill="${c2}"/>`,
+  }[l.pattern] ?? '';
+  const id = `fin${Math.random().toString(36).slice(2, 8)}`;
+  return `<svg class="livery" width="${size}" height="${Math.round(size * 1.05)}" viewBox="0 0 46 48" role="img" aria-label="${esc(title || 'Livery')}">${title ? `<title>${esc(title)}</title>` : ''}
+    <defs><clipPath id="${id}"><path d="${fin}"/></clipPath></defs>
+    <path d="${fin}" fill="${c}"/><g clip-path="url(#${id})">${art}</g>
+    <text x="25" y="${l.pattern === 'split' ? 34 : 22}" text-anchor="middle" font-size="12" fill="${l.pattern === 'split' ? c : c2}">${esc(l.logo)}</text>
+    <path d="M2,46 L44,46" stroke="var(--muted)" stroke-width="2" stroke-linecap="round"/></svg>`;
+}
+
+export const brandLivery = (state, brandId) => G.brandById(state, brandId).livery;

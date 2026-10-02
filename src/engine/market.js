@@ -20,11 +20,30 @@ export const ELASTICITY = { F: 1.0, J: 1.4, W: 1.9, Y: 2.4, C: 1.8 };
 export const OUTSIDE_OPTION = { F: 0.25, J: 0.25, W: 0.35, Y: 0.4, C: 0.35 };
 
 // Beyond the fare travellers will tolerate, demand falls off a cliff.
-export function priceEffect(fare, ref, cls, biz = 1) {
+// elasMult < 1 for flexible (business-style) buyers, > 1 for price-sensitive ones.
+export function priceEffect(fare, ref, cls, biz = 1, elasMult = 1) {
   const ratio = Math.max(0.05, fare / ref);
-  const ceiling = 1.05 + 0.15 * biz + (cls === 'J' || cls === 'F' ? 0.1 : 0);
-  return ratio ** -ELASTICITY[cls] * Math.exp(-Math.max(0, ratio - ceiling) * 5);
+  const ceiling = 1.05 + 0.15 * biz + (cls === 'J' || cls === 'F' ? 0.1 : 0) + (elasMult < 1 ? 0.15 : 0);
+  return ratio ** -(ELASTICITY[cls] * elasMult) * Math.exp(-Math.max(0, ratio - ceiling) * 5);
 }
+
+// ---------------------------------------------------------------------------
+// Revenue management: each cabin sells a flexible fare and (if the bucket is
+// open) a cheaper advance-purchase fare. Price-sensitive travellers compare
+// advance fares with the market's advance fares; flexible ones compare flex fares.
+
+export const PRICE_SENSITIVE = { F: 0.1, J: 0.2, W: 0.45, Y: 0.65 };
+export const MARKET_SPREAD = 0.3;
+export const DEFAULT_RM = { spread: 0.3, advShare: 0.6, peak: 1.06, offpeak: 0.94 };
+export const FLEX_ELASTICITY = 0.6;
+export const ADV_ELASTICITY = 1.25;
+// Share of a cabin's travellers who are price-sensitive on this market (business mix lowers it).
+export const priceSensitiveShare = (cls, biz) => clamp(PRICE_SENSITIVE[cls] * (1.25 - 0.4 * biz), 0.03, 0.9);
+// Fare multipliers that keep the cabin's average at the base fare when everyone buys their own bucket.
+export const flexMult = (cls, spread) => 1 + spread * PRICE_SENSITIVE[cls];
+export const advMult = (cls, spread) => 1 - spread * (1 - PRICE_SENSITIVE[cls]);
+// Peak / off-peak multiplier for this week's seasonality.
+export const seasonalFare = (rm, season) => (season > 1.04 ? rm.peak : season < 0.96 ? rm.offpeak : 1);
 
 // ---------------------------------------------------------------------------
 // Demand
@@ -99,8 +118,11 @@ export function seasonality(a, b, week) {
 // Traffic rights
 
 const singleMarketOf = (country) => SINGLE_MARKETS.find((m) => m.includes(country));
-export function sameMarket(c1, c2) {
+// The European single aviation market (full cabotage) dates from April 1997.
+export const SINGLE_MARKET_YEAR = 1997;
+export function sameMarket(c1, c2, year = 9999) {
   if (c1 === c2) return true;
+  if (year < SINGLE_MARKET_YEAR) return false;
   const m = singleMarketOf(c1);
   return !!m && m.includes(c2);
 }
@@ -110,14 +132,15 @@ export function trafficRights(state, a, b) {
   const home = state.airline.home;
   const ca = airportByCode[a].country;
   const cb = airportByCode[b].country;
-  const touchesHome = sameMarket(home, ca) || sameMarket(home, cb);
+  const y = yearOf(state.week);
+  const touchesHome = sameMarket(home, ca, y) || sameMarket(home, cb, y);
   if (touchesHome) {
-    if (ca === cb && !sameMarket(home, ca)) return { ok: false, reason: 'Cabotage: you cannot fly domestic routes in another country' };
-    return { ok: true, fifth: false };
-  }
-  if (ca === cb) return { ok: false, reason: 'Cabotage: you cannot fly domestic routes in another country' };
+    if (ca === cb && !sameMarket(home, ca, y)) return { ok: false, reason: 'Cabotage: you cannot fly domestic routes in another country' };
+    if (sameMarket(home, ca, y) && sameMarket(home, cb, y)) return { ok: true, fifth: false };
+  } else if (ca === cb) return { ok: false, reason: 'Cabotage: you cannot fly domestic routes in another country' };
+  if (touchesHome) return { ok: true, fifth: false };
   const linked = state.routes.some((r) => {
-    const homeEnd = sameMarket(home, airportByCode[r.a].country) || sameMarket(home, airportByCode[r.b].country);
+    const homeEnd = sameMarket(home, airportByCode[r.a].country, y) || sameMarket(home, airportByCode[r.b].country, y);
     return homeEnd && [r.a, r.b].some((x) => x === a || x === b);
   });
   if (!linked) return { ok: false, reason: 'Neither airport is in your home market. Fifth-freedom routes must extend an existing route from home.' };

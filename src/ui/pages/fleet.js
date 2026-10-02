@@ -1,4 +1,4 @@
-import { G, esc, money, pct, int, num, kpi, panel, table, tabs, options, statement, bar, pill, ap, typeName, statusPill, checkCell } from '../util.js';
+import { G, esc, money, pct, int, num, kpi, panel, table, tabs, options, statement, bar, pill, ap, typeName, statusPill, checkCell, liverySvg } from '../util.js';
 import { formValues } from '../app.js';
 
 const CAT_OPTS = [['all', 'All types'], ...Object.entries(G.CATEGORY_LABELS)];
@@ -16,11 +16,19 @@ export function render(c) {
   ${body(c)}`;
 }
 
+// Aircraft wear the livery of the brand whose routes they fly.
+export function acLivery(s, ac) {
+  const r = ac.schedule.length ? G.routeById(s, ac.schedule[0].routeId) : null;
+  return (r ? G.brandOf(s, r) : G.brandById(s, 'main')).livery;
+}
+const layout = (ac) => [...G.CLASSES.filter((k) => ac.config[k]).map((k) => `${k}${ac.config[k]}`), ac.config.C ? `+${ac.config.C} t combi` : ''].filter(Boolean).join(' ');
+
 export function fleetTable(s, list, { empty } = {}) {
   return table(list, [
+    { h: '', v: (ac) => liverySvg(acLivery(s, ac), { size: 20 }) },
     { h: 'Reg', v: (ac) => `<a href="#fleet/ac/${ac.id}"><b>${ac.reg}</b></a>${ac.group ? `<br><small class="muted">${esc(ac.group)}</small>` : ''}` },
     { h: 'Type', v: (ac) => esc(typeName(ac.type)) },
-    { h: 'Layout', v: (ac) => G.CLASSES.filter((k) => ac.config[k]).map((k) => `${k}${ac.config[k]}`).join(' ') || `${G.typeOf(ac).cargoT} t` },
+    { h: 'Layout', v: (ac) => layout(ac) || `${G.typeOf(ac).cargoT} t` },
     { h: 'Age', cls: 'num', v: (ac) => `${num(G.ageYears(s, ac), 1)} y` },
     { h: 'Terms', v: (ac) => (ac.owned ? 'Owned' : `Lease ${money(ac.lease.monthly)}/mo`) },
     { h: 'Status', v: (ac) => statusPill(s, ac) },
@@ -130,9 +138,11 @@ function detail(c, ac) {
   const st = G.statusOf(s, ac);
   const loan = s.loans.find((l) => l.aircraftId === ac.id);
   const conv = G.CONVERSIONS[ac.type];
-  const units = G.cabinUnits(t, ac.config);
+  const units = G.cabinUnits(t, ac.config, ac.cabin);
+  const year = G.yearOf(s.week);
+  const cabin = { ...G.defaultCabin(t), ...(ac.cabin ?? {}) };
   const warnings = [ac.retired && 'Withdrawn: this airframe has reached its life limit. Sell it for scrap or return it.', t.noise === 2 && G.yearOf(s.week) >= 1998 && 'Chapter 2 noise category: banned from North American and European airports from 2002.', t.fe && 'Three-person cockpit: needs a flight engineer on every flight.'].filter(Boolean);
-  return `${warnings.map((x) => `<div class="callout warn">${esc(x)}</div>`).join('')}<div class="page-head"><h1><a href="#fleet" class="muted">Fleet ›</a> ${ac.reg}</h1><div class="row">${pill(st.label, st.tone)} <span class="muted">${esc(t.name)}</span></div></div>
+  return `${warnings.map((x) => `<div class="callout warn">${esc(x)}</div>`).join('')}<div class="page-head"><h1>${liverySvg(acLivery(s, ac), { size: 40 })} <a href="#fleet" class="muted">Fleet ›</a> ${ac.reg}</h1><div class="row">${pill(st.label, st.tone)} <span class="muted">${esc(t.name)}</span></div></div>
   <div class="grid kpis">
     ${kpi('Age', `${num(G.ageYears(s, ac), 1)} yrs`)}
     ${kpi('Flight hours', int(ac.fh), { sub: `${int(ac.cycles)} cycles` })}
@@ -142,17 +152,24 @@ function detail(c, ac) {
   </div>
   <div class="grid cols-2">
     ${panel('Schedule', `${table(ac.schedule, [
-      { h: 'Route', v: (x) => { const r = G.routeById(s, x.routeId); return `<a href="#routes/${r.id}">${r.a}–${r.b}</a> <small class="muted">${int(r.distance)} km</small>`; } },
+      { h: 'Route', v: (x) => { const r = G.routeById(s, x.routeId); return `<a href="#routes/${r.id}">${r.a}–${r.b}</a> <small class="muted">${int(r.distance)} km${x.season ? ` · ${x.season}` : ''}</small>`; } },
       { h: 'Round trips/wk', cls: 'num', v: (x) => x.freq },
       { h: 'Hours/wk', cls: 'num', v: (x) => int(x.freq * G.roundTripHours(t, G.routeById(s, x.routeId).distance)) },
-      { h: '', v: (x) => `<button class="small danger" data-action="unassign" data-ac="${ac.id}" data-route="${x.routeId}">Remove</button>` },
+      { h: '', v: (x) => `<button class="small danger" data-action="unassign" data-ac="${ac.id}" data-route="${x.routeId}" data-season="${x.season ?? 'all'}">Remove</button>` },
     ], { empty: 'Not scheduled. Assign it from a route page or Planning.' })}
     <p class="muted small">${int(G.scheduledHours(s, ac) + (ac.contractHours || 0))} of ${G.weeklyHours(t)} available block hours/week used${ac.contractHours ? ' (including contract flying)' : ''}.</p>
     <div class="row" data-form><input name="group" placeholder="Sub-fleet group" value="${esc(ac.group ?? '')}"><button class="small" data-action="set-group" data-id="${ac.id}">Set group</button></div>`)}
     ${t.cat === 'freighter' ? panel('Freighter', `<p>Main-deck capacity ${t.cargoT} tonnes. Freighters carry cargo only.</p>`) : panel('Cabin layout', `<div data-form>
-      <div class="grid cols-4 tight">${G.CLASSES.map((k) => `<div class="field"><label>${G.CABIN[k].name} <small class="muted">(${G.CABIN[k].units[t.cat]} units)</small></label><input type="number" name="${k}" value="${ac.config[k] || 0}" min="0" data-live="cfg" data-type="${t.id}" ${k === 'F' && !['wide', 'jumbo'].includes(t.cat) ? 'disabled' : ''}></div>`).join('')}</div>
+      <div class="grid cols-4 tight">${G.CLASSES.map((k) => {
+        const prods = G.seatProducts(t, k, year);
+        const off = k === 'F' && !['wide', 'jumbo'].includes(t.cat);
+        return `<div class="field"><label>${G.CABIN[k].name}</label><input type="number" name="${k}" value="${ac.config[k] || 0}" min="0" data-live="cfg" data-type="${t.id}" ${off ? 'disabled' : ''}>
+        <select name="seat_${k}" data-live="cfg" data-type="${t.id}" ${off || prods.length < 2 ? 'disabled' : ''}>${options(prods.map((p) => [p, `${G.SEAT_PRODUCTS[k][p].name} · ${num(G.seatUnits(t, k, p), 2)}u`]), cabin[k])}</select></div>`;
+      }).join('')}</div>
+      ${G.canCombi(t) ? `<div class="row"><label class="small">Combi main-deck cargo <input type="number" name="C" value="${ac.config.C || 0}" min="0" max="${Math.floor(t.maxSeats / G.COMBI_UNITS_PER_T)}" class="w-60" data-live="cfg" data-type="${t.id}"> tonnes</label><small class="muted">${G.COMBI_UNITS_PER_T} seat units per tonne — handy on thin routes to remote places</small></div>` : ''}
       <p class="small" id="cfg-summary">${units.toFixed(0)} of ${t.maxSeats} floor units used · ${G.seatCount(ac.config)} seats</p>
-      <button class="primary small" data-action="retrofit" data-id="${ac.id}">Retrofit cabin</button>
+      <div class="row"><button class="primary small" data-action="retrofit" data-id="${ac.id}">Retrofit cabin</button><span class="muted small" id="cfg-cost"></span></div>
+      <p class="muted small">Seat types change how much floor each seat needs and how attractive the cabin is (flat beds and suites matter most on long flights; dense economy saves space but passengers notice). Newer products appear as the years go by.</p>
       <p class="muted small">Retrofits take ${['wide', 'jumbo'].includes(t.cat) ? 4 : 2} weeks out of service — or none if done during a C/D check. Before delivery, spec changes cost half.</p>
     </div>`)}
   </div>
@@ -206,7 +223,11 @@ export const actions = {
   'buy-used': (el, ctx) => G.buyUsed(ctx.game, el.dataset.id),
   order: (el, ctx) => G.orderAircraft(ctx.game, el.dataset.type, Number(formValues(el).qty || 1)),
   'cancel-order': (el, ctx) => (confirm('Cancel this order and forfeit the deposit?') ? G.cancelOrder(ctx.game, el.dataset.id) : null),
-  retrofit: (el, ctx) => G.retrofitCabin(ctx.game, el.dataset.id, formValues(el)),
+  retrofit(el, ctx) {
+    const v = formValues(el);
+    const cabin = Object.fromEntries(G.CLASSES.filter((k) => v[`seat_${k}`]).map((k) => [k, v[`seat_${k}`]]));
+    return G.retrofitCabin(ctx.game, el.dataset.id, v, cabin);
+  },
   upgrade: (el, ctx) => G.startUpgrade(ctx.game, el.dataset.id, el.dataset.up),
   convert: (el, ctx) => (confirm('Convert this aircraft to a freighter? It will lose its passenger cabin.') ? G.startConversion(ctx.game, el.dataset.id) : null),
   'do-check': (el, ctx) => G.scheduleCheck(ctx.game, el.dataset.id, el.dataset.check),
@@ -227,11 +248,15 @@ export const actions = {
     return res;
   },
   'extend-lease': (el, ctx) => G.extendLease(ctx.game, el.dataset.id),
-  'live:cfg'(el) {
+  'live:cfg'(el, ctx) {
     const t = G.aircraftById[el.dataset.type];
     const root = el.closest('[data-form]');
-    const cfg = Object.fromEntries(G.CLASSES.map((k) => [k, Number(root.querySelector(`[name=${k}]`).value) || 0]));
-    const units = G.cabinUnits(t, cfg);
+    const cfg = Object.fromEntries([...G.CLASSES, 'C'].map((k) => [k, Number(root.querySelector(`[name=${k}]`)?.value) || 0]));
+    const cabin = Object.fromEntries(G.CLASSES.map((k) => [k, root.querySelector(`[name=seat_${k}]`)?.value]).filter(([, v]) => v));
+    const units = G.cabinUnits(t, cfg, cabin);
+    const ac = ctx.game.fleet.find((a) => location.hash.endsWith(a.id));
+    const costEl = root.querySelector('#cfg-cost');
+    if (ac && costEl) costEl.textContent = `Retrofit ≈ ${G.money(G.retrofitCost(ac, cfg, { ...ac.cabin, ...cabin }))}`;
     const out = root.querySelector('#cfg-summary');
     out.textContent = `${units.toFixed(0)} of ${t.maxSeats} floor units used · ${G.seatCount(cfg)} seats${units > t.maxSeats ? ' — too many!' : ''}`;
     out.className = `small ${units > t.maxSeats ? 'bad' : ''}`;

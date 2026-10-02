@@ -4,9 +4,9 @@ import { hubsPanel } from './planning.js';
 
 export function render(c) {
   const tab = c.params[0] ?? 'overview';
-  const body = { overview, hubs, flow, health }[tab] ?? overview;
+  const body = { overview, hubs, flow, health, regulation }[tab] ?? overview;
   return `<div class="page-head"><h1>Network</h1></div>
-  ${tabs('network', [['overview', 'Overview'], ['hubs', 'Hubs'], ['flow', 'Pax flow'], ['health', 'Health']], tab)}
+  ${tabs('network', [['overview', 'Overview'], ['hubs', 'Hubs'], ['flow', 'Pax flow'], ['health', 'Health'], ['regulation', 'Regulation']], tab)}
   ${body(c)}`;
 }
 
@@ -104,6 +104,43 @@ function health(c) {
     { h: 'Profit', cls: 'num', v: (r) => signed(r.last?.profit ?? 0) },
     { h: 'Recommendation', v: (r) => `<small>${esc(diagnose(r).advice)}</small>` },
   ]))}`;
+}
+
+function regulation(c) {
+  const s = c.state;
+  const home = s.airline.home;
+  const pairs = new Map();
+  for (const r of s.routes) {
+    const ca = ap(r.a).country;
+    const cb = ap(r.b).country;
+    if (ca === cb) continue;
+    const k = G.pairKey(ca, cb);
+    if (!pairs.has(k)) pairs.set(k, { ca, cb, routes: 0 });
+    pairs.get(k).routes += 1;
+  }
+  const rows = [...pairs.values()].map((p) => ({ ...p, t: G.treatyFor(s, p.ca, p.cb), used: G.bilateralUse(s, p.ca, p.cb) }));
+  const pol = G.carbonPolicies(s);
+  const co2 = (s.history.slice(-52).reduce((t, h) => t + (h.co2 ?? 0), 0)) / 1000;
+  const on = s.settings.regulation !== 'off';
+  return `<div class="grid kpis">
+    ${kpi('Bilateral cap', on ? `${G.bilateralCap(G.yearOf(s.week))}/wk` : 'Off', { sub: 'per country pair without open skies' })}
+    ${kpi('Foreign ownership cap', pct(G.foreignStakeCap(s)), { sub: 'largest stake in a foreign airline' })}
+    ${kpi('CO₂ (12 months)', `${int(co2 / 1000)} kt`, { sub: `carbon cost ${money(s.lastReport?.cost.carbon ?? 0)}/wk` })}
+    ${kpi('EU ETS price', pol.ets ? `${G.money(pol.ets)}/t` : 'Not yet', { sub: pol.saf ? `SAF mandate ${pct(pol.saf, 1)}` : pol.corsia ? 'CORSIA in force' : '' })}
+  </div>
+  ${panel('Air service agreements on your network', table(rows, [
+    { h: 'Countries', v: (p) => `${esc(G.COUNTRIES[p.ca])} – ${esc(G.COUNTRIES[p.cb])}` },
+    { h: 'Agreement', v: (p) => (Number.isFinite(p.t.cap) ? pill('Bilateral', 'warn') : pill(p.t.label, 'good')) },
+    { h: 'Routes', cls: 'num', v: (p) => p.routes },
+    { h: 'Weekly frequencies', cls: 'num', v: (p) => (Number.isFinite(p.t.cap) ? `<span class="${p.used >= p.t.cap ? 'bad' : ''}">${p.used}</span> / ${p.t.cap}` : int(p.used)) },
+  ], { empty: 'You fly no international routes yet.' }))}
+  ${panel('How regulation works', `<ul class="plain small">
+    <li><b>Bilateral agreements</b> cap how many weekly flights one airline may fly between two countries: ${G.bilateralCap(1970)} before 1978, ${G.bilateralCap(1985)} until 1992, ${G.bilateralCap(2000)} afterwards.</li>
+    <li><b>Open skies</b> remove the cap. Real agreements arrive around their historical dates (US–Netherlands 1992, US–EU 2008, …), and ${esc(G.COUNTRIES[home])} may sign new ones in any year from 1992${(s.regulation?.openSkies ?? []).length ? ` — so far: ${s.regulation.openSkies.map((k) => k.split('|').map((x) => G.COUNTRIES[x]).join('–')).join(', ')}` : ''}.</li>
+    <li><b>The European single market</b> (from 1997) lets EU airlines fly anywhere inside Europe, including domestic routes in other member states.</li>
+    <li><b>Ownership</b>: you can never buy a foreign airline outright; stakes are capped at 25% until rules relax (possible from 2005) to 49%.</li>
+    <li><b>Carbon</b>: the EU ETS charges flights within Europe from 2012, CORSIA offsets international growth from 2021, and from 2025 flights leaving Europe must burn a rising share of expensive sustainable fuel.</li>
+  </ul>${on ? '' : '<p class="warn small">Regulation is switched off in your game settings.</p>'}`)}`;
 }
 
 export const actions = {

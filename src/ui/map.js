@@ -65,7 +65,8 @@ export function worldMap(state, opts = {}) {
       const cls = !l || !l.freq ? 'route idle' : l.profit < 0 ? 'route loss' : l.cargoCap && !l.seatTotal ? 'route cargo' : 'route';
       const w = 0.8 + (Math.sqrt((l?.paxTotal ?? 0) / maxPax) * 3.2);
       const hl = opts.highlight && (r.a === opts.highlight || r.b === opts.highlight) ? ' hl' : '';
-      return arc(r.a, r.b, cls + hl, `stroke-width="${w.toFixed(2)}" data-href="#routes/${r.id}"`);
+      const brand = r.brand && cls === 'route' ? G.brandOf(state, r) : null;
+      return arc(r.a, r.b, cls + hl, `stroke-width="${w.toFixed(2)}" data-href="#routes/${r.id}"${brand ? ` style="stroke:${esc(brand.color)}"` : ''}`);
     })
     .join('');
   const preview = opts.preview?.[0] && opts.preview?.[1] ? arc(opts.preview[0], opts.preview[1], 'preview') : '';
@@ -79,7 +80,8 @@ export function worldMap(state, opts = {}) {
       const rr = r / Math.sqrt(zoom);
       const label = isServed || zoom > 2.5 || opts.selected?.includes(a.code) ? `<text class="label ${isServed ? 'served' : ''}" x="${(x + rr + 1.5 / zoom).toFixed(1)}" y="${(y + 3.5 / zoom).toFixed(1)}" style="font-size:${(10 / zoom).toFixed(2)}px">${a.code}</text>` : '';
       const hit = opts.interactive ? `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${(8 / zoom).toFixed(2)}" fill="transparent"/>` : '';
-      return `<g ${opts.interactive ? `data-action="map-ap" data-code="${a.code}" class="clickable"` : ''}>${hit}<circle class="${cls}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${rr.toFixed(2)}"><title>${esc(a.city)} (${a.code}) · ${a.pop}M · ${esc(G.COUNTRIES[a.country])}</title></circle>${label}</g>`;
+      const logo = hubs.has(a.code) ? `<text class="hub-logo" x="${x.toFixed(1)}" y="${(y - rr - 2 / zoom).toFixed(1)}" text-anchor="middle" style="font-size:${(11 / zoom).toFixed(2)}px;fill:${esc(state.airline.livery?.color ?? state.airline.color)}">${esc(state.airline.livery?.logo ?? '✈')}</text>` : '';
+      return `<g ${opts.interactive ? `data-action="map-ap" data-code="${a.code}" class="clickable"` : ''}>${hit}<circle class="${cls}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${rr.toFixed(2)}"><title>${esc(a.city)} (${a.code}) · ${a.pop}M · ${esc(G.COUNTRIES[a.country])}</title></circle>${label}${logo}</g>`;
     })
     .join('');
   return `<svg class="map" viewBox="${view.join(' ')}" role="img" aria-label="Network map" style="--z:${zoom}">

@@ -558,3 +558,345 @@ test('niche types follow production years', () => {
   assert.ok(G.orderAircraft(y2020, 'c919').ok, 'orders open before entry into service');
   assert.equal(G.orderAircraft(y2020, 'il86').ok, false);
 });
+
+// ---------------------------------------------------------------------------
+// Advisor, scenarios, revenue management, timetables, seasons, brands,
+// terminals, regulation, history, branding and cabins.
+
+const manual = (s) => G.setAutopilot(s, { pricing: false, fleet: false });
+
+test('autopilot assigns idle aircraft and prices toward the target load factor', () => {
+  const s = setup();
+  const { route } = G.openRoute(s, 'DEN', 'SEA');
+  const ac = quickLease(s, 'a320n');
+  run(s, 1);
+  assert.ok(ac.schedule.some((e) => e.routeId === route.id), 'idle aircraft assigned');
+  // Overpriced: the autopilot brings fares down and loads up.
+  G.setPriceIndex(s, route.id, 1.55);
+  run(s, 1);
+  const lf0 = route.last.lf;
+  run(s, 10);
+  assert.ok(G.priceIndex(s, route) < 1.4, `idx ${G.priceIndex(s, route)}`);
+  assert.ok(route.last.lf > lf0, `lf ${route.last.lf} vs ${lf0}`);
+  const idx = G.priceIndex(s, route);
+  assert.ok(idx >= G.PRICE_RANGE[0] - 1e-9 && idx <= G.PRICE_RANGE[1] + 1e-9);
+  // Pricing by hand takes the route off auto.
+  G.setRouteRm(s, route.id, { autoPrice: false });
+  G.setPriceIndex(s, route.id, 1.4);
+  run(s, 2);
+  assert.ok(Math.abs(G.priceIndex(s, route) - 1.4) < 0.02);
+});
+
+test('the advisor suggests fixes that can be applied', () => {
+  const s = setup();
+  manual(s);
+  const { route } = G.openRoute(s, 'DEN', 'BZN');
+  const a = quickLease(s, 'a321n');
+  G.setFrequency(s, a.id, route.id, 20);
+  run(s, 2);
+  const advice = G.adviseRoutes(s);
+  const cut = advice.find((x) => x.routeId === route.id && x.kind === 'cut');
+  assert.ok(cut, JSON.stringify(advice));
+  assert.ok(G.applyAdvice(s, route.id, 'cut').ok);
+  assert.equal(G.routeFreq(s, route), 15);
+  const { route: empty } = G.openRoute(s, 'DEN', 'SLC');
+  quickLease(s, 'a320n');
+  assert.ok(G.adviseRoutes(s).some((x) => x.routeId === empty.id && x.kind === 'assign'));
+  assert.ok(G.applyAdvice(s, empty.id, 'assign').ok);
+  assert.ok(G.routeFreq(s, empty) > 0);
+});
+
+test('revenue management splits flexible and advance travellers', () => {
+  const s = setup();
+  manual(s);
+  const { route } = G.openRoute(s, 'DEN', 'LAX');
+  G.assignAircraft(s, quickLease(s, 'a320n').id, route.id);
+  run(s, 3);
+  const open = route.last;
+  assert.ok(open.adv.Y > 0 && open.adv.Y < open.pax.Y, 'some advance, some flex');
+  const yieldOpen = open.revenue.Y / open.pax.Y;
+  G.setRouteRm(s, route.id, { advShare: 0 });
+  run(s, 2);
+  const closed = route.last;
+  assert.equal(Math.round(closed.adv.Y), 0);
+  assert.ok(closed.pax.Y < open.pax.Y, 'closing the bucket loses leisure travellers');
+  assert.ok(closed.revenue.Y / closed.pax.Y > yieldOpen, 'but raises the average fare');
+  assert.ok(G.priceEffect(1.2, 1, 'Y', 1, G.FLEX_ELASTICITY) > G.priceEffect(1.2, 1, 'Y', 1, G.ADV_ELASTICITY));
+});
+
+test('summer and winter schedules fly in their own season', () => {
+  const s = setup({ startYear: 2026 });
+  manual(s);
+  const { route } = G.openRoute(s, 'DEN', 'BZN');
+  const ac = quickLease(s, 'a320n');
+  assert.ok(G.setFrequency(s, ac.id, route.id, 14, { season: 'summer' }).ok);
+  assert.ok(G.setFrequency(s, ac.id, route.id, 3, { season: 'winter' }).ok);
+  assert.equal(ac.schedule.length, 2);
+  assert.equal(G.seasonOf(s.week), 'winter');
+  assert.equal(G.routeFreq(s, route), 3);
+  assert.equal(G.peakFreq(s, route), 14);
+  run(s, 2);
+  assert.ok(route.last.freq > 1 && route.last.freq <= 3, `winter freq ${route.last.freq}`);
+  while (G.seasonOf(s.week) !== 'summer') run(s, 1);
+  run(s, 1);
+  assert.ok(route.last.freq > 10, `summer freq ${route.last.freq}`);
+  // Setting the same frequency for both seasons merges back to one entry.
+  G.setFrequency(s, ac.id, route.id, 14, { season: 'winter' });
+  assert.equal(ac.schedule.length, 1);
+  assert.ok(!G.isSeasonal(ac));
+});
+
+test('connection banks beat a small rolling hub when spokes fly daily', () => {
+  const hub = { banks: 0, discipline: 0.6 };
+  const rolling = G.hubConnectionQuality(hub, 14, 14, 60);
+  const banked = G.hubConnectionQuality({ banks: 2, discipline: 0.8 }, 14, 14, 60);
+  const thin = G.hubConnectionQuality({ banks: 6, discipline: 0.8 }, 7, 7, 60);
+  assert.ok(banked > rolling, `${banked} vs ${rolling}`);
+  assert.ok(thin < banked, 'too many banks for the frequency');
+  const s = setup();
+  for (const to of ['SEA', 'LAX', 'ORD', 'BZN', 'SLC']) G.openRoute(s, 'DEN', to);
+  for (const r of s.routes) G.setFrequency(s, quickLease(s, 'a320n').id, r.id, 14);
+  assert.equal(G.suggestedBanks(s, 'DEN'), 2);
+  run(s, 6);
+  assert.equal(s.hubs[0].banks, 2, 'auto timetable');
+  assert.ok(G.setHubTimetable(s, 'DEN', { banks: 0 }).ok);
+  assert.equal(s.hubs[0].autoBanks, false);
+});
+
+test('terminals take years to build, then cut fees and add slots', () => {
+  const s = setup({ hub: 'JFK' });
+  manual(s);
+  s.cash = 1e9;
+  const held = s.slots.JFK.held;
+  assert.ok(G.buildTerminal(s, 'JFK').ok);
+  assert.ok(!G.buildTerminal(s, 'JFK').ok, 'one project at a time');
+  const { route } = G.openRoute(s, 'JFK', 'BOS');
+  G.setFrequency(s, quickLease(s, 'a320n').id, route.id, 10);
+  run(s, 2);
+  const before = route.last.cost.landing / route.last.flights;
+  run(s, G.TERMINALS[1].weeks);
+  assert.equal(s.hubs[0].terminal, 1);
+  assert.equal(s.slots.JFK.held, held + G.TERMINAL_EFFECT.slots);
+  const after = route.last.cost.landing / route.last.flights;
+  assert.ok(after < before, `${after} vs ${before}`);
+});
+
+test('subsidiary brands have their own reputation, fares and costs', () => {
+  const s = setup();
+  manual(s);
+  const { route } = G.openRoute(s, 'DEN', 'LAS');
+  G.assignAircraft(s, quickLease(s, 'a320n').id, route.id);
+  run(s, 2);
+  const main = route.last;
+  const res = G.launchBrand(s, { name: 'Zoom', code: 'ZM', kind: 'lcc' });
+  assert.ok(res.ok);
+  assert.ok(G.setRouteBrand(s, route.id, res.brand.id).ok);
+  assert.ok(G.priceIndex(s, route) < 0.85);
+  run(s, 3);
+  const lcc = route.last;
+  assert.ok(lcc.cost.distribution / lcc.ticket < main.cost.distribution / main.ticket, 'direct sales');
+  assert.ok(lcc.crewFactor < 1);
+  assert.ok(lcc.ancillary / lcc.paxTotal > main.ancillary / main.paxTotal, 'paid extras');
+  const results = G.brandResults(s);
+  assert.equal(results.length, 2);
+  assert.ok(results[1].routes === 1 && Number.isFinite(results[1].rep));
+  const { route: far } = G.openRoute(s, 'DEN', 'LHR');
+  assert.ok(!G.setRouteBrand(s, far.id, res.brand.id).ok, 'too far for the LCC');
+  assert.ok(G.closeBrand(s, res.brand.id).ok);
+  assert.equal(route.brand, undefined);
+});
+
+test('acquired rivals can be kept as subsidiary brands', () => {
+  const s = setup();
+  s.cash = 5e10;
+  const target = G.RIVALS.filter((r) => r.country === 'US' && ['lcc', 'ulcc'].includes(r.type) && s.rivals[r.id]?.status === 'active').sort((a, b) => s.rivals[a.id].fleet - s.rivals[b.id].fleet)[0];
+  const res = G.acquireRival(s, target.id, 'cash', { asBrand: true });
+  assert.ok(res.ok, res.error);
+  const brand = s.brands.find((b) => b.name === target.name);
+  assert.ok(brand && brand.kind === 'lcc');
+  assert.ok(s.routes.some((r) => r.brand === brand.id));
+});
+
+test('campaigns cost money, lift demand for a while, then end', () => {
+  const s = setup();
+  manual(s);
+  const { route } = G.openRoute(s, 'DEN', 'SEA');
+  G.assignAircraft(s, quickLease(s, 'a320n').id, route.id);
+  run(s, 2);
+  const cash = s.cash;
+  assert.ok(G.startCampaign(s, 'business').ok);
+  assert.ok(s.cash < cash);
+  assert.ok(!G.startCampaign(s, 'business').ok, 'no duplicates');
+  assert.ok(G.campaignEffect(s, 'main').flex > 1);
+  run(s, 1);
+  assert.ok(s.lastReport.cost.marketing > s.marketing, 'campaign spend reported');
+  run(s, G.CAMPAIGNS.business.weeks + 1);
+  assert.equal(s.campaigns.length, 0);
+  const rep = s.reputation;
+  G.startCampaign(s, 'sponsorship');
+  run(s, 10);
+  assert.ok(s.reputation > rep - 3);
+});
+
+test('repainting costs money unless a relaunch is running', () => {
+  const s = setup();
+  manual(s);
+  quickLease(s, 'a320n');
+  const cash = s.cash;
+  assert.ok(G.setLivery(s, 'main', { pattern: 'band', color2: '#ff0000' }, G.typeOf).ok);
+  assert.ok(s.cash < cash);
+  assert.equal(s.airline.livery.pattern, 'band');
+  G.startCampaign(s, 'relaunch');
+  const c2 = s.cash;
+  assert.ok(G.setLivery(s, 'main', { logo: '★' }, G.typeOf).ok);
+  assert.equal(s.cash, c2);
+  assert.ok(!G.setLivery(s, 'main', { pattern: 'tartan' }, G.typeOf).ok);
+});
+
+test('bilateral agreements cap international frequencies until open skies', () => {
+  const s = setup({ startYear: 1975 });
+  manual(s);
+  assert.equal(G.treatyFor(s, 'US', 'CA').cap, 14);
+  const { route } = G.openRoute(s, 'DEN', 'YVR');
+  const a = quickLease(s, 'b727');
+  const b = quickLease(s, 'b727');
+  assert.ok(G.setFrequency(s, a.id, route.id, 10).ok);
+  const res = G.setFrequency(s, b.id, route.id, 7);
+  assert.ok(!res.ok && /air service agreement/.test(res.error), res.error);
+  assert.ok(G.setFrequency(s, b.id, route.id, 4).ok);
+  const later = setup({ startYear: 2010 });
+  assert.equal(G.treatyFor(later, 'US', 'CA').kind, 'open');
+  assert.equal(G.treatyFor(later, 'US', 'DE').kind, 'open');
+  assert.ok(!G.sameMarket('FR', 'DE', 1990) && G.sameMarket('FR', 'DE', 2000));
+  const off = setup({ startYear: 1975, settings: { regulation: 'off' } });
+  assert.equal(G.treatyFor(off, 'US', 'CA').cap, Infinity);
+});
+
+test('carbon pricing applies to modern European flying only', () => {
+  const s = setup({ hub: 'FRA', startYear: 2026 });
+  manual(s);
+  const { route } = G.openRoute(s, 'FRA', 'MAD');
+  G.assignAircraft(s, quickLease(s, 'a320n').id, route.id);
+  run(s, 2);
+  assert.ok(route.last.cost.carbon > 0);
+  assert.ok(route.last.co2 > 0);
+  assert.ok(s.lastReport.cost.carbon > 0);
+  const old = setup({ hub: 'FRA', startYear: 1999 });
+  manual(old);
+  const { route: r2 } = G.openRoute(old, 'FRA', 'MAD');
+  G.assignAircraft(old, quickLease(old, 'a320c').id, r2.id);
+  run(old, 2);
+  assert.equal(r2.last.cost.carbon, 0);
+  assert.equal(G.etsPrice(2005), 0);
+  assert.ok(G.safShare(2030) > G.safShare(2025));
+});
+
+test('foreign stakes follow ownership rules', () => {
+  const s = setup();
+  const foreign = G.RIVALS.find((r) => r.country === 'GB' && s.rivals[r.id]?.status === 'active' && r.type !== 'cargo');
+  assert.equal(G.acquisitionTerms(s, foreign.id).stake, 0.25);
+  s.regulation.foreignCap = 0.49;
+  const t = G.acquisitionTerms(s, foreign.id);
+  assert.equal(t.stake, 0.49);
+  s.cash = 1e11;
+  assert.ok(G.buyStake(s, foreign.id).ok);
+  assert.equal(s.stakes[foreign.id], 0.49);
+});
+
+test('seat products change floor space, appeal and availability', () => {
+  const s = setup({ startYear: 1975 });
+  const jumbo = G.makeAircraft(s, 'b742', {});
+  const res = G.retrofitCabin(s, jumbo.id, { F: 12, J: 40, W: 0, Y: 300 }, { J: 'flat' });
+  assert.ok(!res.ok && /1998/.test(res.error));
+  const t = G.aircraftById.b789;
+  assert.ok(G.seatUnits(t, 'J', 'suite') > G.seatUnits(t, 'J', 'flat'));
+  assert.ok(G.seatUnits(t, 'Y', 'dense') < 1);
+  assert.ok(G.productQ('J', 'flat', true) > G.productQ('J', 'recliner', true));
+  assert.ok(G.cabinUnits(t, { F: 0, J: 30, W: 0, Y: 200 }, { J: 'suite' }) > G.cabinUnits(t, { F: 0, J: 30, W: 0, Y: 200 }, { J: 'flat' }));
+  // Long-haul business travellers prefer beds.
+  const m = setup({ startYear: 2026 });
+  manual(m);
+  const { route } = G.openRoute(m, 'DEN', 'LHR');
+  const a = quickLease(m, 'b789');
+  a.cabin = { ...a.cabin, J: 'recliner' };
+  G.assignAircraft(m, a.id, route.id);
+  run(m, 3);
+  const recl = route.last.demand.J;
+  a.cabin.J = 'suite';
+  run(m, 3);
+  assert.ok(route.last.demand.J > recl * 1.15, `${route.last.demand.J} vs ${recl}`);
+});
+
+test('combis carry freight on the main deck', () => {
+  const s = setup();
+  const ac = G.makeAircraft(s, 'b738', {});
+  const before = G.cargoCapacity(ac);
+  assert.ok(G.retrofitCabin(s, ac.id, { F: 0, J: 0, W: 0, Y: 120, C: 8 }).ok);
+  run(s, 3);
+  assert.equal(ac.config.C, 8);
+  assert.equal(G.cargoCapacity(ac), before + 8000);
+  assert.ok(!G.validateConfig(G.aircraftById.dhc6, { F: 0, J: 0, W: 0, Y: 10, C: 1 }).ok);
+});
+
+test('milestones, annual reports and market share are recorded', () => {
+  const s = setup({ startYear: 2026 });
+  const { route } = G.openRoute(s, 'DEN', 'SEA');
+  G.assignAircraft(s, quickLease(s, 'a320n').id, route.id);
+  run(s, 56);
+  assert.ok(s.milestones.some((m) => m.id === 'first_flight'));
+  assert.equal(s.annual.length, 1);
+  assert.equal(s.annual[0].year, 2026);
+  assert.ok(s.annual[0].pax > 0 && Number.isFinite(s.annual[0].profit));
+  assert.ok(s.shareHistory.length >= 12);
+  assert.ok(G.shareNow(s) > 0 && G.shareNow(s) < 1);
+  assert.ok(G.freeScore(s) > 0);
+});
+
+test('every scenario sets up a working airline', () => {
+  for (const id of Object.keys(G.SCENARIOS)) {
+    const s = G.newGame({ scenario: id, seed: 77 });
+    const sc = G.SCENARIOS[id];
+    assert.equal(G.yearOf(s.week), sc.year, id);
+    assert.equal(s.hubs[0].code, sc.hub);
+    assert.ok(s.fleet.length >= 3 && s.routes.length >= 4, id);
+    assert.ok(s.fleet.filter((a) => a.schedule.length).length >= s.fleet.length * 0.7, `${id}: fleet scheduled`);
+    assert.equal(G.scenarioGoals(s).length, sc.goals.length);
+    run(s, 20);
+    assert.ok(['playing', 'sold'].includes(s.status) || s.status === 'bankrupt', `${id} ${s.status}`);
+    assert.ok(s.lastReport.pax > 0, id);
+  }
+});
+
+test('scenarios are won when goals are met and lost at the deadline', () => {
+  const s = G.newGame({ scenario: 'panam65', seed: 3 });
+  s.scenario.met = { regions: s.week, intercont: s.week, jumbos: s.week, bigger: s.week };
+  G.scenarioTick(s);
+  assert.equal(s.status, 'won');
+  assert.ok(s.scenario.score >= 4000);
+  assert.ok(G.continueFreePlay(s).ok);
+  assert.equal(s.status, 'playing');
+  const l = G.newGame({ scenario: 'lcc05', seed: 3 });
+  l.week = l.scenario.deadlineWeek;
+  G.scenarioTick(l);
+  assert.equal(l.status, 'lost');
+});
+
+test('version 4 saves migrate to the current shape', () => {
+  const s = setup();
+  const { route } = G.openRoute(s, 'DEN', 'SEA');
+  G.assignAircraft(s, quickLease(s, 'a320n').id, route.id);
+  run(s, 2);
+  const old = JSON.parse(JSON.stringify(s));
+  old.version = 4;
+  old.hubs[0] = { code: 'DEN', openedWeek: 0, bank: 3, lounge: false, facilities: {} };
+  for (const k of ['autopilot', 'brands', 'campaigns', 'regulation', 'annual', 'milestones', 'shareHistory', 'scenario']) delete old[k];
+  delete old.airline.livery;
+  delete old.settings.regulation;
+  const m = G.migrate(old);
+  assert.equal(m.version, G.SAVE_VERSION);
+  assert.equal(m.hubs[0].banks, 5);
+  assert.equal(m.autopilot.pricing, false, 'old games keep manual pricing');
+  run(m, 3);
+  assert.equal(m.status, 'playing');
+  assert.equal(G.migrate({ version: 2 }), null);
+});

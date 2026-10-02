@@ -6,6 +6,12 @@ and Twin Otter to A350, Concorde included) with realistic production years and l
 hub-and-spoke network, run engineering, crew, safety and finance, and fight
 100+ real and generated airlines — all while the board judges you every quarter.
 
+Play free-form from any year, or take on a **scenario** — survive the 1973 oil
+shock, rescue a bankrupt flag carrier, build a 2005 low-cost carrier, become Pan
+Am, or turn a Gulf airline into a global super-connector — with goals, a
+deadline and a score. Automation (pricing, aircraft assignment, hub timetables,
+staffing, maintenance) is on by default; take the controls whenever you like.
+
 Runs entirely in the browser: no dependencies, no build step.
 
 ```sh
@@ -23,17 +29,27 @@ Each page is a hash route (`#routes/rt12`, `#fleet/ac/ac3`, `#engineering/schedu
 
 | Operations | Finance & Strategy |
 | --- | --- |
-| **#dashboard** — Cash · Profit/wk · Load · Fleet, monthly profit, needs attention, operations, fleet by type, network, staffing, upcoming deliveries, board objectives | **#finances** — cash, net/wk, income statement, monthly results, credit rating & metrics, term loans, revolving credit, aircraft-secured loans, leases, fuel hedging, equity |
-| **#routes** — route list, planner, per-route detail: cabin fares, aircraft frequencies, rivals, economics, cargo | **#management** — airline customisation, government subsidies, statistics (CASK/RASK/yield…), hubs, service standards, codeshares & alliances, staffing breakdown, cargo |
-| **#planning** — hubs, fleet capacity & idle aircraft, crew plan, slots | **#competitors** — 70+ real airlines with finances, hostility and head-to-head routes |
+| **#dashboard** — Cash · Profit/wk · Load · Fleet, scenario goals, monthly profit, needs attention, advisor (one-click route fixes), operations, fleet by type, network, staffing, upcoming deliveries, board objectives | **#finances** — cash, net/wk, income statement, monthly results, credit rating & metrics, term loans, revolving credit, aircraft-secured loans, leases, fuel hedging, equity |
+| **#routes** — route list, planner, per-route detail: base fares, flex/advance revenue management, summer/winter frequencies, brand, treaty, rivals, economics, cargo | **#management** — airline customisation, autopilot, subsidiary brands, livery & marketing campaigns, government subsidies, statistics (CASK/RASK/yield…), hubs, service standards, codeshares & alliances, staffing breakdown, cargo |
+| **#planning** — hubs (timetable banks, terminals), fleet capacity & idle aircraft, crew plan, slots | **#competitors** — 70+ real airlines with finances, hostility and head-to-head routes; buy stakes or acquire (optionally keeping the brand) |
 | **#fleet** — aircraft, groups, on order, acquire (leases, used, factory orders), aircraft detail | **#cargo** — overview, network, freighter fleet & P2F conversions |
 | **#map** — world map with regional zoom, airport explorer | **#charter** — sports teams, tour operators, cruise lines, pilgrimages… |
 | **#engineering** — A/B/C/D check schedule, MRO facilities, outsourcing, upgrades, cabin layouts, safety & incident log | **#special** — military airlift, VIP, humanitarian, ACMI, medevac; ventures (pilot academy, third-party MRO, ground handling, simulator centre) |
-| **#network** — overview, hubs, pax flow (local vs connecting O&D), route health | |
+| **#network** — overview, hubs, pax flow (local vs connecting O&D), route health, regulation (treaties, ownership, carbon) | **#history** — market share vs home-market rivals, annual reports, milestone timeline |
 | **#markets** — market analyst, opportunity scanner, Learn guide | |
 
 ## Simulation layers
 
+- **Advisor & autopilot** — optional weekly auto-pricing toward a target load factor (within 80–160% of the brand's price level, never dumping fares to fill seats that shouldn't fly), automatic advance-bucket management, idle-aircraft assignment to the routes spilling most passengers and rebalancing onto unserved routes, plus route suggestions (add flights, cut frequency, raise/lower fares, close) you can apply with one click. Hand-priced routes stay manual.
+- **Scenarios** — five preset starts with inherited fleets, routes, staff, debt and forced history, goals locked in as they're met (or judged at the deadline), win/lose screens, a score, and the option to keep playing in free play. Free play has a running score too.
+- **Revenue management** — every cabin sells a flex fare and an advance-purchase fare around the base fare. Travellers split into flexible (low elasticity) and price-sensitive (high elasticity) segments by cabin and business mix; an advance-seat bucket caps cheap sales, turned-away leisure travellers partly buy up, and peak/off-peak multipliers follow seasonal demand.
+- **Hub timetables** — rolling hubs or 1–6 daily connection banks with a discipline setting. Connection quality depends on how spoke frequency fills the banks; banks cost aircraft waiting time, peak-hour punctuality and coordination. Auto mode re-times hubs monthly.
+- **Seasons** — per-aircraft summer (Apr–Oct) and winter schedules; slots and treaty rights are counted on the busier season, crew on the season ahead.
+- **Subsidiaries** — low-cost, regional-feeder and premium brands with their own reputation, service, fares, cost structure (crew scope, distribution, handling, ancillaries) and livery, on a shared fleet and balance sheet; acquired airlines can be kept as brands. Found the mainline itself as full-service or low-cost.
+- **Terminals** — pier → own terminal → signature terminal at hubs: lower charges, extra slots, appeal and punctuality, for big up-front bets and upkeep.
+- **Regulation** — bilateral caps on weekly frequencies between countries (tighter before 1978 and 1992), historical and random open-skies deals, the European single market from 1997, foreign-ownership caps (25% → 49%) on stakes, EU ETS, CORSIA and SAF mandates with per-route carbon cost and CO₂ tracking. Can be switched off.
+- **History & branding** — milestones, annual reports, monthly passenger share against the biggest home-market rivals; tail-fin liveries (pattern, colours, logo) on the sidebar, fleet, map and reports; marketing campaigns (fare sale, corporate sales, double miles, sponsorship, relaunch with free repaint, new-route ads).
+- **Cabins** — seat products per class (dense/standard/extra-legroom economy, cradle premium economy, recliner/angled/flat/suite business, open/suite first) with era availability, floor space, short/long-haul appeal and refit cost; combi main-deck cargo on 100+ seat types.
 - **Difficulty** — Easy / Normal / Hard / Brutal presets plus eleven custom dials (capital, demand, rival aggression, startups, events, accident risk, weather, board patience, credit costs, union militancy, fuel volatility) and switches for inflation, wage indexing and historical events.
 - **Inflation** — the engine works in constant 2027 dollars while a noisy, loosely historical price level converts everything you see into the dollars of the day. Fixed nominal contracts (loans, lease rents, order balances, hedges, contract and subsidy payments) and cash erode in real terms; cash earns interest; unindexed wages erode and unions claim catch-up raises.
 - **Eras** — start any year from 1960. Regional demand growth, real fare levels, fuel, interest rates, booking costs and accident rates follow history (in constant 2027 dollars). Aircraft are only orderable while in production; older types live on in lease and used markets. First-generation jets need flight engineers, Chapter 2 jets are banned in NA/EU from 2002, airframes retire at 45 years.
@@ -46,7 +62,7 @@ Each page is a hash route (`#routes/rt12`, `#fleet/ac/ac3`, `#engineering/schedu
 - **Fleet** — 32 types incl. freighters; cabin layouts constrained by floor units; factory orders (1.5–5 year lead times, deposits, volume discounts, delays), operating leases, used market, sale-and-leaseback, P2F conversions, upgrades (Wi-Fi, IFE, seats, engine kits).
 - **Engineering** — A/B/C/D checks by flight hours and calendar; in-house line stations and heavy hangars with bay limits vs. 12 MRO shops with price/quality/wait; regulator grounding; reliability → dispatch and on-time performance.
 - **People** — five workforces sized from scheduled block hours (augmented long-haul crews, premium-cabin attendants), training pipelines, regional pay, morale, attrition, unions and strikes.
-- **Traffic rights & slots** — cabotage, EU single market, fifth-freedom permits; slot-controlled and congested airports with monthly slot pools.
+- **Traffic rights & slots** — cabotage, EU single market, fifth-freedom permits, bilateral agreements; slot-controlled and congested airports with monthly slot pools.
 - **Finance** — fuel price random walk and hedging, credit rating from leverage/liquidity/coverage, rating-dependent borrowing costs, quarterly tax with loss carry-forward, share price, equity raises and dividends.
 - **Rivals** — monthly AI: finances, hostility, fare wars, capacity dumps, entry onto your profitable routes, staff poaching with better pay packages, mergers among rivals, bankruptcies, and generated startups. Buy 25% stakes (dividends + codeshare) or acquire domestic rivals outright (hubs, fleet, routes, staff); weak share prices invite hostile bids for you.
 - **Events** — 23 decisions: union claims, oil shocks, recessions, pandemics, volcanic ash, hurricanes, ATC strikes, airworthiness directives, delivery delays, pilot poaching, rival collapses, alliance invitations…
@@ -57,11 +73,14 @@ Each page is a hash route (`#routes/rt12`, `#fleet/ac/ac3`, `#engineering/schedu
 ```
 src/data/     airports, aircraft & check program, rivals, business data, eras, history, land outlines
 src/engine/   core (rng, calendar), market, fleet, network, maintenance, staff,
-              ops (weekly flow simulation), finance, rivals, contracts, safety, events, turn
+              ops (weekly flow simulation), finance, rivals, contracts, safety, events,
+              advisor (autopilot), brands (subsidiaries, liveries, campaigns), regulation,
+              chronicle (history), scenarios, turn (weekly turn, save migration)
 src/ui/       app shell & router, map, shared components, pages/*
 scripts/      serve.js, simulate.js (balance), build-land.js (map data)
 test/         engine tests
 ```
 
-The engine is pure and deterministic per seed; state is plain JSON.
+The engine is pure and deterministic per seed; state is plain JSON (save version 5;
+version-4 saves migrate automatically).
 Map outlines: Natural Earth 1:110m land (public domain) via world-atlas.

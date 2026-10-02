@@ -186,9 +186,55 @@ export function classFareMultiplier(cls, distance) {
   return CABIN[cls].fare;
 }
 
-export function cabinUnits(type, config) {
+// Seat products per cabin. Business and first are sized absolutely by airframe
+// group (a lie-flat bed needs the same floor in any widebody); premium economy
+// and economy scale the standard pitch. q = [short-haul, long-haul] appeal.
+export const cabinGroup = (cat) => (cat === 'wide' || cat === 'jumbo' ? 'wide' : cat === 'narrow' ? 'narrow' : 'small');
+export const SEAT_PRODUCTS = {
+  F: {
+    open: { name: 'Open first', units: { wide: 6 }, q: [1, 1], cost: 450e3 },
+    suite: { name: 'First suite', units: { wide: 7.5 }, q: [1.05, 1.12], cost: 900e3, minYear: 2003 },
+  },
+  J: {
+    recliner: { name: 'Recliner', units: { small: 1.5, narrow: 2, wide: 2.6 }, q: [1, 0.82], cost: { small: 15e3, narrow: 30e3, wide: 60e3 } },
+    angled: { name: 'Angled lie-flat', units: { narrow: 2.6, wide: 3.1 }, q: [1.03, 0.95], cost: { narrow: 90e3, wide: 150e3 }, minYear: 1995 },
+    flat: { name: 'Fully flat bed', units: { narrow: 3.2, wide: 3.5 }, q: [1.06, 1.05], cost: { narrow: 160e3, wide: 220e3 }, minYear: 1998 },
+    suite: { name: 'Business suite (door)', units: { narrow: 3.6, wide: 4.1 }, q: [1.1, 1.12], cost: { narrow: 260e3, wide: 330e3 }, minYear: 2016 },
+  },
+  W: {
+    recliner: { name: 'Wide recliner', scale: 1, q: [1, 1], cost: 25e3 },
+    cradle: { name: 'Leg-rest cradle', scale: 1.15, q: [1.02, 1.07], cost: 40e3, minYear: 2008 },
+  },
+  Y: {
+    dense: { name: 'High-density (28–29")', scale: 0.88, q: [0.95, 0.88], cost: 4e3 },
+    standard: { name: 'Standard (30–31")', scale: 1, q: [1, 1], cost: 6e3 },
+    extra: { name: 'Extra legroom (32–34")', scale: 1.12, q: [1.04, 1.07], cost: 8e3 },
+  },
+};
+// Products that physically fit this airframe group in a given year.
+export function seatProducts(type, cls, year = 9999) {
+  const g = cabinGroup(type.cat);
+  return Object.entries(SEAT_PRODUCTS[cls]).filter(([, p]) => (p.scale || p.units[g]) && (p.minYear ?? 0) <= year).map(([k]) => k);
+}
+export function defaultCabin(type) {
+  const g = cabinGroup(type.cat);
+  return { F: 'open', J: g === 'wide' && type.intro >= 1997 ? 'flat' : 'recliner', W: 'recliner', Y: 'standard' };
+}
+export function seatUnits(type, cls, product) {
+  const p = SEAT_PRODUCTS[cls][product] ?? SEAT_PRODUCTS[cls][defaultCabin(type)[cls]];
+  if (p.scale) return CABIN[cls].units[type.cat] * p.scale;
+  if (type.cat === 'sst') return CABIN[cls].units.sst;
+  return p.units[cabinGroup(type.cat)] ?? CABIN[cls].units[type.cat];
+}
+export const productQ = (cls, product, long) => (SEAT_PRODUCTS[cls][product]?.q ?? [1, 1])[long ? 1 : 0];
+// Main-deck cargo in a combi takes 5 economy-seat units per tonne.
+export const COMBI_UNITS_PER_T = 5;
+export const canCombi = (type) => type.maxSeats >= 100 && !['commuter', 'sst', 'freighter'].includes(type.cat);
+
+export function cabinUnits(type, config, cabin) {
   if (type.cat === 'freighter') return 0;
-  return CLASSES.reduce((s, c) => s + (config[c] || 0) * CABIN[c].units[type.cat], 0);
+  const products = { ...defaultCabin(type), ...(cabin ?? {}) };
+  return CLASSES.reduce((s, c) => s + (config[c] || 0) * seatUnits(type, c, products[c]), 0) + (config.C || 0) * COMBI_UNITS_PER_T;
 }
 
 export function seatCount(config) {

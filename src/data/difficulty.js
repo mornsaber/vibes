@@ -25,10 +25,11 @@ export const SETTING_DEFS = [
 export const OPTION_DEFS = [
   { key: 'inflation', label: 'Inflation', options: [['historical', 'Loosely historical'], ['off', 'Off (constant 2027 dollars)']], desc: 'Prices, wages and money follow a noisy version of real-world inflation.' },
   { key: 'cola', label: 'Index wages to inflation', options: [[true, 'Yes — automatic cost-of-living rises'], [false, 'No — wages erode until unions win raises']], desc: 'Without indexing, real pay falls every year and unions demand catch-up raises.' },
+  { key: 'regulation', label: 'Regulation', options: [['historical', 'Historical (treaties, ownership caps, carbon)'], ['off', 'Off (open skies everywhere, no carbon costs)']], desc: 'Bilateral air service agreements cap international flights until open-skies deals; modern-era carbon pricing and SAF mandates.' },
   { key: 'history', label: 'Historical events', options: [['loose', 'Loosely historical'], ['off', 'Off (random events only)']], desc: 'Oil crises, wars, crashes of the economy and pandemics around their real dates.' },
 ];
 
 export function makeSettings(preset = 'normal', overrides = {}) {
   const base = PRESETS[preset] ?? PRESETS.normal;
-  return { preset: PRESETS[preset] ? preset : 'normal', inflation: 'historical', cola: true, history: 'loose', ...base, ...overrides };
+  return { preset: PRESETS[preset] ? preset : 'normal', inflation: 'historical', cola: true, history: 'loose', regulation: 'historical', ...base, ...overrides };
 }

@@ -31,7 +31,7 @@ function list(c) {
     ${kpi('Gone since you began', rows(s).filter((x) => x.rs.status !== 'active').length)}
   </div>
   ${panel('', table(list, [
-    { h: 'Airline', v: (x) => `<a href="#competitors/${x.r.id}"><b>${esc(x.r.name)}</b></a> <small class="muted">${x.r.code}</small>${x.r.startup ? ` ${pill('Startup', 'warn')}` : ''}${x.rs.status !== 'active' ? ` ${pill(x.rs.status === 'merged' ? `Merged into ${G.rivalDef(s, x.rs.mergedInto)?.code ?? ''}` : x.rs.status === 'acquired' ? 'Acquired by you' : 'Bankrupt', x.rs.status === 'acquired' ? 'good' : 'bad')}` : ''}${s.stakes[x.r.id] ? ` ${pill('25% stake', 'good')}` : ''}` },
+    { h: 'Airline', v: (x) => `<a href="#competitors/${x.r.id}"><b>${esc(x.r.name)}</b></a> <small class="muted">${x.r.code}</small>${x.r.startup ? ` ${pill('Startup', 'warn')}` : ''}${x.rs.status !== 'active' ? ` ${pill(x.rs.status === 'merged' ? `Merged into ${G.rivalDef(s, x.rs.mergedInto)?.code ?? ''}` : x.rs.status === 'acquired' ? 'Acquired by you' : 'Bankrupt', x.rs.status === 'acquired' ? 'good' : 'bad')}` : ''}${s.stakes[x.r.id] ? ` ${pill(`${Math.round(s.stakes[x.r.id] * 100)}% stake`, 'good')}` : ''}` },
     { h: 'Model', v: (x) => G.RIVAL_TYPES[x.r.type].label },
     { h: 'Alliance', v: (x) => esc(x.r.alliance ?? '—') },
     { h: 'Hubs', v: (x) => `<small>${x.r.hubs.join(' ')}</small>` },
@@ -80,12 +80,12 @@ function detail(c, r) {
     return `${statement([
       ['Estimated value', money(at.value)],
       ['Takeover price', at.domestic ? money(at.price) : '<span class="muted">Not allowed (foreign ownership rules)</span>'],
-      ['25% stake', s.stakes[r.id] ? 'You own 25%' : money(at.stakePrice)],
+      [`${Math.round(at.stake * 100)}% stake`, s.stakes[r.id] ? `You own ${Math.round(s.stakes[r.id] * 100)}%` : money(at.stakePrice)],
       ['Their cash', money(rs.cash)],
     ])}<div class="row wrap">
-      ${at.reasons.length ? `<span class="muted small">${esc(at.reasons[0])}</span>` : `<button class="primary small" data-action="acquire" data-id="${r.id}" data-pay="cash">Acquire for cash</button><button class="small" data-action="acquire" data-id="${r.id}" data-pay="shares">Acquire with shares</button>`}
-      ${s.stakes[r.id] ? `<button class="small" data-action="sell-stake" data-id="${r.id}">Sell stake</button>` : r.type !== 'cargo' ? `<button class="small" data-action="buy-stake" data-id="${r.id}">Buy 25% stake</button>` : ''}
-    </div><p class="muted small">Buying a domestic rival brings its home-market hubs, up to 80 aircraft, its strongest routes and its workforce (morale dips during integration). A stake earns dividends, forces a codeshare and ends hostilities.</p>`;
+      ${at.reasons.length ? `<span class="muted small">${esc(at.reasons[0])}</span>` : `<button class="primary small" data-action="acquire" data-id="${r.id}" data-pay="cash">Acquire for cash</button><button class="small" data-action="acquire" data-id="${r.id}" data-pay="shares">Acquire with shares</button><label class="check small"><input type="checkbox" data-change="acq-brand" ${c.ui.acqBrand ? 'checked' : ''}> Keep as a subsidiary brand</label>`}
+      ${s.stakes[r.id] ? `<button class="small" data-action="sell-stake" data-id="${r.id}">Sell stake</button>` : r.type !== 'cargo' ? `<button class="small" data-action="buy-stake" data-id="${r.id}">Buy ${Math.round(at.stake * 100)}% stake</button>` : ''}
+    </div><p class="muted small">Buying a domestic rival brings its home-market hubs, up to 80 aircraft, its strongest routes and its workforce (morale dips during integration). Tick “keep as a subsidiary brand” to run it under its own name, reputation and fares. A stake earns dividends, forces a codeshare and ends hostilities; foreign stakes are capped by ownership rules.</p>`;
   })()) : ''}
   ${panel('Head-to-head routes', table(overlap, [
     { h: 'Route', v: (x) => `<a href="#routes/${x.id}">${x.a}–${x.b}</a>` },
@@ -101,7 +101,7 @@ export const actions = {
   acquire(el, ctx) {
     const r = G.rivalDef(ctx.game, el.dataset.id);
     if (!confirm(`Acquire ${r.name}? This is a huge, irreversible deal.`)) return;
-    const res = G.acquireRival(ctx.game, el.dataset.id, el.dataset.pay);
+    const res = G.acquireRival(ctx.game, el.dataset.id, el.dataset.pay, { asBrand: !!ctx.ui.acqBrand });
     if (res.ok) location.hash = '#network/overview';
     return res;
   },
@@ -111,4 +111,5 @@ export const actions = {
 
 export const changes = {
   'rival-filter': (el, ctx) => (ctx.ui.rivalFilter = el.value),
+  'acq-brand': (el, ctx) => (ctx.ui.acqBrand = el.checked),
 };

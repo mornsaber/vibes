@@ -4,8 +4,10 @@ import * as G from '../src/engine/index.js';
 
 const years = Number(process.argv[2]) || 2;
 
-function play(label, { hub, routes, types, seed = 11, pricing = true }) {
+function play(label, { hub, routes, types, seed = Number(process.env.SEED) || 11, pricing = true }) {
   const s = G.newGame({ name: 'Sim Air', code: 'SM', hub, seed });
+  // Pricing is left to the autopilot (on by default); fleet assignment is scripted below.
+  G.setAutopilot(s, { pricing, fleet: false });
   for (const to of routes) {
     const r = G.openRoute(s, hub, to);
     if (!r.ok) console.log('  open failed', to, r.error);
@@ -33,14 +35,6 @@ function play(label, { hub, routes, types, seed = 11, pricing = true }) {
     if (s.pendingEvent) G.resolveEvent(s, s.pendingEvent.choices.findIndex((c) => !c.disabled));
     schedule();
     G.advanceWeek(s);
-    if (pricing) {
-      for (const r of s.routes) {
-        if (!r.last || !r.last.seatTotal) continue;
-        const idx = G.priceIndex(s, r);
-        if (r.last.lf > 0.93) G.setPriceIndex(s, r.id, idx * 1.03);
-        else if (r.last.lf < 0.72) G.setPriceIndex(s, r.id, idx * 0.97);
-      }
-    }
   }
   const yr = s.history.slice(-52);
   const sumv = (f) => yr.reduce((a, h) => a + f(h), 0);

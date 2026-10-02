@@ -1,7 +1,7 @@
 // Application shell: hash router, sidebar navigation, top bar with time
 // controls, decision modal, persistence and the global action dispatcher.
 
-import { G, esc, money, pct, int } from './util.js';
+import { G, esc, money, pct, int, liverySvg } from './util.js';
 import * as dashboard from './pages/dashboard.js';
 import * as routes from './pages/routes.js';
 import * as planning from './pages/planning.js';
@@ -17,6 +17,7 @@ import * as cargo from './pages/cargo.js';
 import * as charter from './pages/charter.js';
 import * as special from './pages/special.js';
 import * as start from './pages/start.js';
+import * as history from './pages/history.js';
 
 const SAVE_KEY = 'airline-exec-sim/save-v3';
 
@@ -35,6 +36,7 @@ export const NAV = [
     ['finances', 'Finances', '$', finances],
     ['management', 'Management', '♜', management],
     ['competitors', 'Competitors', '⚑', competitors],
+    ['history', 'History', '❦', history],
     ['cargo', 'Cargo', '▣', cargo],
     ['charter', 'Charter', '☀', charter],
     ['special', 'Special Ops', '★', special],
@@ -54,8 +56,7 @@ export const ctx = { game: loadGame(), ui: { navOpen: false } };
 function loadGame() {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
-    const g = raw ? JSON.parse(raw) : null;
-    return g?.version === 3 ? g : null;
+    return raw ? G.migrate(JSON.parse(raw)) : null;
   } catch {
     return null;
   }
@@ -130,7 +131,7 @@ export function render() {
 function renderSidebar(active) {
   const g = ctx.game;
   return `<aside class="sidebar">
-    <div class="logo"><span class="tail" style="background:${esc(g.airline.color)}">${esc(g.airline.code)}</span><div><b>${esc(g.airline.name)}</b><small>${esc(g.airline.homeName)}</small></div></div>
+    <div class="logo">${liverySvg(g.airline.livery ?? { color: g.airline.color }, { size: 34, title: g.airline.name })}<div><b>${esc(g.airline.name)}</b><small>${esc(g.scenario?.name ?? g.airline.homeName)}</small></div></div>
     ${NAV.map((s) => `<div class="nav-section">${esc(s.section)}</div>${s.items
       .map(([key, label, icon]) => `<a href="#${key}" class="nav-item ${key === active ? 'active' : ''}"><span class="ico">${icon}</span>${label}${badge(key)}</a>`)
       .join('')}`).join('')}
@@ -185,12 +186,23 @@ function renderModal(g) {
       </div>
     </div></div>`;
   }
+  if (['won', 'lost'].includes(g.status) && !ctx.ui.dismissedEnd) {
+    const won = g.status === 'won';
+    const goals = G.scenarioGoals(g);
+    return `<div class="modal-backdrop"><div class="modal">
+      <h3>${G.dateLabel(g.week)} · Scenario ${won ? 'complete' : 'over'}</h3>
+      <h2>${won ? '🏆 ' : ''}${esc(g.scenario.name)}: ${won ? 'you did it' : 'out of time'}</h2>
+      <ul class="plain">${goals.map((x) => `<li>${g.scenario.met[x.id] ? '✅' : '❌'} ${esc(x.label)}</li>`).join('')}</ul>
+      <p>Score <b>${int(g.scenario.score)}</b>. You carried ${int(g.stats.pax)} passengers and earned ${money(g.stats.revenue)} in revenue.</p>
+      <div class="choices"><button class="primary" data-action="free-play">Keep flying in free play</button><button data-action="dismiss-end">Review the airline</button><button data-action="abandon">Start a new game</button></div>
+    </div></div>`;
+  }
   if (g.status !== 'playing' && !ctx.ui.dismissedEnd) {
     const fired = g.status === 'fired';
     return `<div class="modal-backdrop"><div class="modal">
       <h3>${G.dateLabel(g.week)}</h3>
       <h2>${g.status === 'sold' ? `${esc(g.airline.name)} has been sold` : fired ? 'The board has fired you' : `${esc(g.airline.name)} has collapsed`}</h2>
-      <p>${g.status === 'sold' ? `Shareholders accepted ${money(g.soldFor ?? 0)} for the airline.` : fired ? 'Shareholders lost patience with your results.' : 'Creditors have forced the airline into administration.'} You lasted ${(G.elapsed(g) / 52).toFixed(1)} years, carried ${int(g.stats.pax)} passengers and earned ${money(g.stats.revenue)} in revenue.</p>
+      <p>${g.status === 'sold' ? `Shareholders accepted ${money(g.soldFor ?? 0)} for the airline.` : fired ? 'Shareholders lost patience with your results.' : 'Creditors have forced the airline into administration.'} You lasted ${(G.elapsed(g) / 52).toFixed(1)} years${g.scenario ? ` (scenario score ${int(g.scenario.score)})` : ` (score ${int(G.freeScore(g))})`}, carried ${int(g.stats.pax)} passengers and earned ${money(g.stats.revenue)} in revenue.</p>
       <div class="choices"><button data-action="dismiss-end">Review the wreckage</button><button class="primary" data-action="abandon">Start a new airline</button></div>
     </div></div>`;
   }
@@ -237,6 +249,7 @@ const GLOBAL_ACTIONS = {
   menu: () => (ctx.ui.menu = true),
   'close-menu': () => (ctx.ui.menu = false),
   'dismiss-end': () => (ctx.ui.dismissedEnd = true),
+  'free-play': () => G.continueFreePlay(ctx.game),
   abandon() {
     if (!confirm('Abandon this airline? Your save will be deleted.')) return;
     ctx.ui = { navOpen: false };
@@ -258,8 +271,8 @@ const GLOBAL_CHANGES = {
     const file = el.files?.[0];
     if (!file) return;
     try {
-      const g = JSON.parse(await file.text());
-      if (g.version !== 3) throw new Error('Not a compatible save file');
+      const g = G.migrate(JSON.parse(await file.text()));
+      if (!g) throw new Error('Not a compatible save file');
       ctx.game = g;
       ctx.ui = { navOpen: false };
       saveGame();

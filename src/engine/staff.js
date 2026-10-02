@@ -8,7 +8,7 @@ import { REGIONS, airportByCode } from '../data/airports.js';
 import { eraUnion } from '../data/eras.js';
 import { clamp, fail, ok, rand, log, money, sum, monthKey } from './core.js';
 import { typeOf } from './fleet.js';
-import { blockHours, routeById, stations } from './network.js';
+import { blockHours, routeById, stations, activeSchedule, seasonOf } from './network.js';
 import { facilityEngineers } from './maintenance.js';
 
 const PILOT_HOURS = 15; // productive block hours per pilot per week
@@ -94,7 +94,7 @@ function crewHours(state, horizon = 0) {
   for (const ac of state.fleet) {
     if (ac.deliveryWeek > state.week + horizon || ac.retired) continue;
     const type = typeOf(ac);
-    for (const s of ac.schedule) {
+    for (const s of activeSchedule(state, ac, seasonOf(state.week + horizon))) {
       const r = routeById(state, s.routeId);
       if (!r) continue;
       const bh = blockHours(type, r.distance);

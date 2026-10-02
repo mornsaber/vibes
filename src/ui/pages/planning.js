@@ -30,12 +30,35 @@ export function hubsPanel(s) {
     { h: 'Departures/wk', cls: 'num', v: (r) => int(r.deps) },
     { h: 'Pax/wk', cls: 'num', v: (r) => int(r.pax) },
     { h: 'Connecting/wk', cls: 'num', v: (r) => int(r.connecting) },
-    { h: 'Connections', v: (r) => ['', 'Basic', 'Banked', 'Wave-optimised'][r.h.bank] + (r.h.bank < 3 ? ` <button class="small" data-action="hub-bank" data-code="${r.h.code}">Upgrade (${money(r.h.bank === 1 ? 3e6 : 8e6)})</button>` : '') },
+    { h: 'Timetable', v: (r) => `${r.h.banks ? `${r.h.banks} banks/day` : 'Rolling'}${r.h.autoBanks ? ' <small class="muted">auto</small>' : ''}` },
+    { h: 'Terminal', v: (r) => (r.h.terminalBuild ? pill(`${G.TERMINALS[r.h.terminalBuild.level].name} in ${r.h.terminalBuild.readyWeek - s.week} wk`, 'warn') : r.h.terminal ? pill(G.TERMINALS[r.h.terminal].name, 'good') : '<span class="muted">Shared</span>') },
     { h: 'Lounge', v: (r) => (r.h.lounge ? pill('Open', 'good') : `<button class="small" data-action="hub-lounge" data-code="${r.h.code}">Build ($6M)</button>`) },
     { h: 'Engineering', v: (r) => Object.keys(r.h.facilities).map((k) => pill(G.FACILITIES[k].name.split(' ')[0] + (r.h.facilities[k].readyWeek > s.week ? ' (building)' : ''), r.h.facilities[k].readyWeek > s.week ? 'warn' : 'good')).join(' ') || '<a href="#engineering/mro">None</a>' },
   ])}
   <div class="row wrap" data-form><select name="code">${airportOptions(candidates, '', 'Open a new hub at…')}</select><button data-action="open-hub">Open hub</button>
-  <span class="muted small">Hubs let passengers connect, base crews (avoiding overnight costs) and host engineering. Must be in your home market.</span></div>`);
+  <span class="muted small">Hubs let passengers connect, base crews (avoiding overnight costs) and host engineering. Must be in your home market.</span></div>`)
+  + `<div class="grid cols-2">${s.hubs.map((h) => hubCard(s, h)).join('')}</div>`;
+}
+
+// Timetable banks and terminal investment for one hub.
+function hubCard(s, h) {
+  const spokes = s.routes.filter((r) => r.a === h.code || r.b === h.code);
+  const sample = spokes.length >= 2 ? G.hubConnectionQuality(h, 14, 14, G.hubDepartures(s, h.code)) : null;
+  const next = (h.terminal ?? 0) + 1;
+  const T = G.TERMINALS[next];
+  const E = G.TERMINAL_EFFECT;
+  return panel(`${h.code} · ${ap(h.code).city}`, `<div class="stack" data-form>
+    <div class="row wrap">Connection banks
+      <select name="banks">${options([[0, 'Rolling (no banks)'], ...[1, 2, 3, 4, 5, 6].map((n) => [n, `${n} bank${n > 1 ? 's' : ''} a day`])], h.banks)}</select>
+      <button class="small" data-action="hub-timetable" data-code="${h.code}">Re-time (${money(G.RETIME_COST)})</button>
+      <label class="check"><input type="checkbox" data-change="hub-auto" data-code="${h.code}" ${h.autoBanks ? 'checked' : ''}> Auto <small class="muted">(suggests ${G.suggestedBanks(s, h.code) || 'rolling'})</small></label></div>
+    <div class="field"><label>Bank discipline: <b>${pct(h.discipline)}</b></label><input type="range" min="0" max="1" step="0.05" value="${h.discipline}" data-change="hub-discipline" data-code="${h.code}">
+    <small class="muted">Tighter banks make connections quicker and more reliable, but aircraft wait for the wave (−${pct(0.06 * h.discipline, 1)} utilisation on hub flights) and peaks hurt punctuality.</small></div>
+    <p class="small">Connection quality for two daily spokes: <b>${sample ? pct(sample) : '–'}</b> of ideal ${h.banks ? '' : '(a rolling hub relies on sheer frequency)'} · Coordination ${money(h.banks * 8e3 * (0.5 + h.discipline))}/wk</p>
+    <hr>
+    ${T ? `<p class="small"><b>${T.name}</b>: ${money(G.terminalCost(h.code, next))}, ${T.weeks} weeks to build. Each level cuts airport charges ${pct(E.fees)}, adds ${E.slots} slot pairs at slot-controlled airports, lifts passenger appeal ${pct(E.appeal, 1)} and punctuality ${pct(E.otp, 1)}; upkeep ${money(50e3)}/wk.</p>
+    <button class="small" data-action="hub-terminal" data-code="${h.code}" ${h.terminalBuild ? 'disabled' : ''}>${h.terminalBuild ? 'Under construction' : `Build ${T.name.toLowerCase()}`}</button>` : `<p class="small good">${G.TERMINALS[h.terminal].name}: fully developed.</p>`}
+  </div>`);
 }
 
 function hubs(c) {
@@ -70,7 +93,7 @@ function capacity(c) {
     { h: 'Aircraft', v: (ac) => `<a href="#fleet/ac/${ac.id}">${ac.reg}</a> <small class="muted">${esc(typeName(ac.type))}</small>` },
     { h: 'Status', v: (ac) => statusPill(s, ac) },
     { h: 'Utilisation', v: (ac) => `${bar(G.utilization(s, ac), 1)} <small>${int(G.scheduledHours(s, ac) + (ac.contractHours || 0))}/${G.weeklyHours(G.typeOf(ac))} h</small>` },
-    { h: 'Routes', v: (ac) => ac.schedule.map((x) => { const r = G.routeById(s, x.routeId); return r ? `<a href="#routes/${r.id}">${r.a}–${r.b}</a>×${x.freq}` : ''; }).join(', ') || (ac.contractHours ? 'Contract' : '<span class="muted">—</span>') },
+    { h: 'Routes', v: (ac) => ac.schedule.map((x) => { const r = G.routeById(s, x.routeId); return r ? `<a href="#routes/${r.id}">${r.a}–${r.b}</a>×${x.freq}${x.season ? `<small class="muted"> ${x.season[0].toUpperCase()}</small>` : ''}` : ''; }).join(', ') || (ac.contractHours ? 'Contract' : '<span class="muted">—</span>') },
     { h: 'Assign to', v: (ac) => {
       const opts = s.routes.filter((r) => G.canOperate(s, ac, r).ok && G.maxFrequency(s, ac, r) > 0);
       return opts.length ? `<div class="row" data-form><select name="route">${options(opts.map((r) => [r.id, `${r.a}–${r.b} (≤${G.maxFrequency(s, ac, r)})`]), '')}</select><button class="small" data-action="quick-assign" data-ac="${ac.id}">Add</button></div>` : '<span class="muted small">No hours / routes</span>';
@@ -108,15 +131,21 @@ function slots(c) {
 
 export const actions = {
   'open-hub': (el, ctx) => G.openHub(ctx.game, formValues(el).code),
-  'hub-bank': (el, ctx) => G.upgradeHubBank(ctx.game, el.dataset.code),
+  'hub-timetable': (el, ctx) => G.setHubTimetable(ctx.game, el.dataset.code, { banks: Number(formValues(el).banks) }),
+  'hub-terminal': (el, ctx) => (confirm('Commit to this terminal project? The cost is paid up front.') ? G.buildTerminal(ctx.game, el.dataset.code) : null),
   'hub-lounge': (el, ctx) => G.buildLounge(ctx.game, el.dataset.code),
   'quick-assign'(el, ctx) {
     const v = formValues(el);
     const ac = ctx.game.fleet.find((a) => a.id === el.dataset.ac);
     const route = ctx.game.routes.find((r) => r.id === v.route);
     if (!route) return { ok: false, error: 'Pick a route' };
-    return G.setFrequency(ctx.game, ac.id, route.id, (ac.schedule.find((x) => x.routeId === route.id)?.freq ?? 0) + G.maxFrequency(ctx.game, ac, route) - (ac.schedule.find((x) => x.routeId === route.id)?.freq ?? 0));
+    return G.setFrequency(ctx.game, ac.id, route.id, G.maxFrequency(ctx.game, ac, route));
   },
   'buy-slots': (el, ctx) => G.buySlots(ctx.game, el.dataset.code, formValues(el).n),
   'sell-slots': (el, ctx) => G.sellSlots(ctx.game, el.dataset.code, formValues(el).n),
+};
+
+export const changes = {
+  'hub-auto': (el, ctx) => G.setHubTimetable(ctx.game, el.dataset.code, { auto: el.checked }),
+  'hub-discipline': (el, ctx) => G.setHubTimetable(ctx.game, el.dataset.code, { discipline: Number(el.value) }),
 };

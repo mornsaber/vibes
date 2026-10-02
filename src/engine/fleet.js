@@ -1,7 +1,7 @@
 // Fleet: acquiring aircraft (factory orders, operating leases, used market),
 // valuation, cabin configuration, retrofits, upgrades and freighter conversions.
 
-import { AIRCRAFT, aircraftById, cabinUnits, seatCount, CLASSES, CHECKS, UPGRADES, CONVERSIONS, inProduction, inService } from '../data/aircraft.js';
+import { AIRCRAFT, aircraftById, cabinUnits, seatCount, CLASSES, CHECKS, UPGRADES, CONVERSIONS, inProduction, inService, SEAT_PRODUCTS, seatProducts, defaultCabin, canCombi, cabinGroup } from '../data/aircraft.js';
 import { clamp, fail, ok, rand, randInt, pick, weightedPick, newId, log, money, sum, yearOf, weekOfYearStart } from './core.js';
 
 export const typeOf = (ac) => aircraftById[ac.type];
@@ -35,7 +35,7 @@ function registration(state) {
 
 // Create an aircraft record. `ageWeeks` > 0 makes a used airframe with a
 // plausible maintenance history.
-export function makeAircraft(state, typeId, { owned = true, lease = null, ageWeeks = 0, deliveryWeek = state.week, config, reliability, price } = {}) {
+export function makeAircraft(state, typeId, { owned = true, lease = null, ageWeeks = 0, deliveryWeek = state.week, config, cabin, reliability, price } = {}) {
   const type = aircraftById[typeId];
   const builtWeek = deliveryWeek - ageWeeks;
   const fh = Math.round(ageWeeks * (type.cat === 'wide' || type.cat === 'jumbo' ? 85 : 65));
@@ -61,6 +61,7 @@ export function makeAircraft(state, typeId, { owned = true, lease = null, ageWee
     deliveryWeek,
     acquiredPrice: price ?? (owned ? type.price : 0),
     config: { ...(config ?? type.config) },
+    cabin: { ...defaultCabin(type), ...(cabin ?? {}) },
     upgrades: [],
     fh,
     cycles: Math.round(fh / 2.2),
@@ -107,14 +108,14 @@ export const weeklyFromMonthly = (m) => (m * 12) / 52;
 // ---------------------------------------------------------------------------
 // Factory orders
 
-export function orderAircraft(state, typeId, qty = 1, config) {
+export function orderAircraft(state, typeId, qty = 1, config, cabin) {
   const type = aircraftById[typeId];
   if (!type) return fail('Unknown aircraft type');
   const year = yearOf(state.week);
   if (!inProduction(type, year)) return fail(year < type.intro ? `${type.name} isn't on offer until ${type.intro - 3}.` : `${type.name} is out of production — look at the lease and used markets.`);
   qty = clamp(Math.round(qty), 1, 50);
   if (config) {
-    const v = validateConfig(type, config);
+    const v = validateConfig(type, config, cabin, year);
     if (!v.ok) return v;
   }
   const discount = Math.min(0.25, 0.02 * (qty - 1));
@@ -134,6 +135,7 @@ export function orderAircraft(state, typeId, qty = 1, config) {
       price: unit,
       paid: unit * 0.2,
       config: { ...(config ?? type.config) },
+      cabin: { ...defaultCabin(type), ...(cabin ?? {}) },
     });
   }
   log(state, `Ordered ${qty}× ${type.name} at ${money(unit)} each${discount ? ` (${Math.round(discount * 100)}% volume discount)` : ''}. First delivery in ${first - state.week} weeks.`, 'info', 'fleet');
@@ -288,43 +290,59 @@ export function saleLeaseback(state, acId) {
 // ---------------------------------------------------------------------------
 // Cabin configuration
 
-export function validateConfig(type, config) {
+export function validateConfig(type, config, cabin, year = 9999) {
   if (type.cat === 'freighter') return fail('Freighters have no passenger cabin');
-  for (const c of CLASSES) {
+  for (const c of [...CLASSES, 'C']) {
     const n = config[c] ?? 0;
     if (!Number.isInteger(n) || n < 0) return fail('Seat counts must be whole numbers');
   }
   if (config.F && !['wide', 'jumbo'].includes(type.cat)) return fail('First class needs a widebody');
+  if (config.C && !canCombi(type)) return fail('Only airliners of 100+ seats can be fitted as combis');
   if (seatCount(config) < 4) return fail('Too few seats');
-  const units = cabinUnits(type, config);
+  for (const c of CLASSES) {
+    const p = cabin?.[c];
+    if (!p || !config[c]) continue;
+    if (!SEAT_PRODUCTS[c][p]) return fail('Unknown seat type');
+    if (!seatProducts(type, c, year).includes(p)) return fail(`${SEAT_PRODUCTS[c][p].name} seats don't fit a ${type.name}${SEAT_PRODUCTS[c][p].minYear > year ? ` (available from ${SEAT_PRODUCTS[c][p].minYear})` : ''}`);
+  }
+  const units = cabinUnits(type, config, cabin);
   if (units > type.maxSeats) return fail(`Layout uses ${units.toFixed(0)} of ${type.maxSeats} available floor units`);
   return ok({ units });
 }
 
-const SEAT_COST = { F: 600e3, J: { tiny: 15e3, small: 25e3, narrow: 45e3, wide: 220e3, jumbo: 220e3 }, W: 25e3, Y: 6e3 };
-export function retrofitCost(ac, config) {
+const seatCost = (type, cls, product) => {
+  const c = SEAT_PRODUCTS[cls][product]?.cost ?? 0;
+  return typeof c === 'number' ? c : c[cabinGroup(type.cat)] ?? 0;
+};
+// Changing a seat type refits the whole cabin; otherwise only added/removed seats are paid.
+export function retrofitCost(ac, config, cabin = ac.cabin) {
   const type = typeOf(ac);
+  const now = { ...defaultCabin(type), ...(ac.cabin ?? {}) };
+  const next = { ...now, ...(cabin ?? {}) };
   let cost = 250e3;
   for (const c of CLASSES) {
-    const delta = Math.abs((config[c] ?? 0) - (ac.config[c] ?? 0));
-    const unit = c === 'J' ? SEAT_COST.J[type.mx] : SEAT_COST[c];
-    cost += delta * unit;
+    const n = config[c] ?? 0;
+    if (next[c] !== now[c] && n) cost += n * seatCost(type, c, next[c]);
+    else cost += Math.abs(n - (ac.config[c] ?? 0)) * seatCost(type, c, next[c]);
   }
+  cost += Math.abs((config.C ?? 0) - (ac.config.C ?? 0)) * 60e3;
   return cost;
 }
 
-export function retrofitCabin(state, acId, config) {
+export function retrofitCabin(state, acId, config, cabin) {
   const ac = state.fleet.find((a) => a.id === acId);
   if (!ac) return fail('No such aircraft');
   const type = typeOf(ac);
-  config = Object.fromEntries(CLASSES.map((c) => [c, Math.round(Number(config[c]) || 0)]));
-  const v = validateConfig(type, config);
+  config = Object.fromEntries([...CLASSES, 'C'].map((c) => [c, Math.round(Number(config[c]) || 0)]));
+  cabin = { ...defaultCabin(type), ...(ac.cabin ?? {}), ...(cabin ?? {}) };
+  const v = validateConfig(type, config, cabin, yearOf(state.week));
   if (!v.ok) return v;
-  const cost = retrofitCost(ac, config);
+  const cost = retrofitCost(ac, config, cabin);
   if (state.cash < cost) return fail(`Retrofit costs ${money(cost)}`);
   if (!isDelivered(state, ac)) {
     // Change the build spec before delivery: just the seat cost difference.
     ac.config = config;
+    ac.cabin = cabin;
     state.cash -= cost * 0.5;
     log(state, `Updated the cabin spec of ${ac.reg} before delivery (${money(cost * 0.5)}).`, 'info', 'engineering');
     return ok();
@@ -332,7 +350,7 @@ export function retrofitCabin(state, acId, config) {
   state.cash -= cost;
   state.ledgerCapex.retrofits += cost;
   const weeks = ['wide', 'jumbo'].includes(type.cat) ? 4 : 2;
-  addWork(state, ac, weeks, 'Cabin retrofit', { config });
+  addWork(state, ac, weeks, 'Cabin retrofit', { config, cabin });
   log(state, `${ac.reg} enters a cabin retrofit (${money(cost)}).${ac.downtime.combined ? ' Combined with its shop visit — no extra downtime.' : ''}`, 'info', 'engineering');
   return ok();
 }
@@ -398,10 +416,12 @@ export function startConversion(state, acId) {
 export function finishWork(state, ac) {
   const a = ac.downtime.apply ?? {};
   if (a.config) ac.config = a.config;
+  if (a.cabin) ac.cabin = a.cabin;
   if (a.upgrades) for (const u of a.upgrades) if (!ac.upgrades.includes(u)) ac.upgrades.push(u);
   if (a.convertTo) {
     ac.type = a.convertTo;
     ac.config = { ...aircraftById[a.convertTo].config };
+    ac.cabin = defaultCabin(aircraftById[a.convertTo]);
     ac.upgrades = ac.upgrades.filter((u) => UPGRADES[u].fuel);
   }
   log(state, `${ac.reg} is back in service after: ${ac.downtime.label}.`, 'good', 'engineering');

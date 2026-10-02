@@ -9,7 +9,12 @@ import { eraFuel, eraRate, eraOf, cpiIndex, histInflation } from '../data/eras.j
 import { PRESETS, makeSettings } from '../data/difficulty.js';
 import { clamp, sum, fail, ok, rand, randNormal, log, money, monthKey, quarterKey, yearOf, weeksInUnit, weekOfYearStart, elapsed, setPriceLevel, dayOfYear } from './core.js';
 import { typeOf, isDelivered, makeAircraft, refreshMarkets, removeAircraft, weeklyFromMonthly, aircraftValue } from './fleet.js';
-import { replenishSlots, stations } from './network.js';
+import { replenishSlots, stations, newHub, hubWeeklyCost, autoBankTick, terminalTick } from './network.js';
+import { autoPricing, autoFleet, defaultAutopilot } from './advisor.js';
+import { brandTick, campaignTick, defaultLivery, BRAND_WEEKLY } from './brands.js';
+import { regulationYearly } from './regulation.js';
+import { milestoneTick, shareTick, annualReport } from './chronicle.js';
+import { setupScenario, scenarioTick, finalizeScenario, SCENARIOS } from './scenarios.js';
 import { maintenanceTick, facilityUpkeep } from './maintenance.js';
 import { staffTick, strikeTick, payroll, headcount, newWorkforce } from './staff.js';
 import { simulateOperations, serviceAppeal, marketingEffect } from './ops.js';
@@ -21,15 +26,26 @@ import { buildTimeline, timelineTick, weatherTick, safetyTick } from './safety.j
 
 export const DIFFICULTY = PRESETS;
 
-const zeroCosts = () => ({ checks: 0, recruiting: 0, severance: 0, hedging: 0, incidents: 0 });
+const zeroCosts = () => ({ checks: 0, recruiting: 0, severance: 0, hedging: 0, incidents: 0, campaigns: 0 });
+
+export const SAVE_VERSION = 5;
 const zeroCapex = () => ({ aircraft: 0, retrofits: 0, facilities: 0, slots: 0, other: 0 });
 
-export function newGame({ name = 'Skyward Air', code = 'SK', hub = 'ORD', seed, difficulty = 'normal', settings: overrides = {}, color = '#4da3ff', startYear = 2027 } = {}) {
+export function newGame(opts = {}) {
+  const sc = SCENARIOS[opts.scenario];
+  if (sc) {
+    const state = createGame({ ...sc.airline, ...opts, hub: sc.hub, startYear: sc.year, difficulty: opts.difficulty ?? sc.difficulty });
+    return setupScenario(state, opts.scenario);
+  }
+  return createGame(opts);
+}
+
+function createGame({ name = 'Skyward Air', code = 'SK', hub = 'ORD', seed, difficulty = 'normal', settings: overrides = {}, color = '#4da3ff', startYear = 2027, livery, model = 'full' } = {}) {
   const ap = airportByCode[hub];
   if (!ap) throw new Error(`Unknown hub ${hub}`);
   const settings = makeSettings(difficulty, overrides);
   const state = {
-    version: 4,
+    version: SAVE_VERSION,
     settings,
     rng: (seed ?? Math.floor(Math.random() * 2 ** 31)) | 0,
     nextId: 1,
@@ -38,9 +54,9 @@ export function newGame({ name = 'Skyward Air', code = 'SK', hub = 'ORD', seed, 
     startWeek: weekOfYearStart(startYear),
     startYear,
     status: 'playing',
-    airline: { name, code: code.toUpperCase().slice(0, 2), color, slogan: '', home: ap.country, homeName: COUNTRIES[ap.country], difficulty },
+    airline: { name, code: code.toUpperCase().slice(0, 2), color, slogan: '', home: ap.country, homeName: COUNTRIES[ap.country], difficulty, model, livery: { ...defaultLivery(color), ...(livery ?? {}), color } },
     cash: settings.cash,
-    hubs: [{ code: hub, openedWeek: 0, bank: 1, lounge: false, facilities: {} }],
+    hubs: [newHub(hub, weekOfYearStart(startYear))],
     fleet: [],
     orders: [],
     routes: [],
@@ -82,8 +98,20 @@ export function newGame({ name = 'Skyward Air', code = 'SK', hub = 'ORD', seed, 
     ledgerCapex: zeroCapex(),
     lowCashWeeks: 0,
     advanceRemaining: 0,
+    autopilot: defaultAutopilot(),
+    brands: [],
+    campaigns: [],
+    regulation: { openSkies: [], foreignCap: 0.25, notes: [] },
+    annual: [],
+    milestones: [],
+    shareHistory: [],
+    scenario: null,
   };
   setPriceLevel(state.macro.priceLevel);
+  if (model === 'lcc') {
+    state.service = { catering: 1, comfort: 2, ground: 2, baggage: 1, security: 3, loyalty: 1 };
+    state.marketing = 80e3;
+  }
   // Founding team hired before launch: enough crew for the first couple of narrowbodies.
   for (const r of ROLE_IDS) state.staff[r] = newWorkforce(state, r, { pilots: 24, cabin: 60, engineers: 12, ground: 50, admin: 45 }[r]);
   if (ap.slots) state.slots[hub] = { held: ap.slots === 2 ? 42 : 70, pool: ap.slots === 2 ? 6 : 60 };
@@ -94,6 +122,36 @@ export function newGame({ name = 'Skyward Air', code = 'SK', hub = 'ORD', seed, 
   setObjectives(state);
   state.board.lastPrice = sharePrice(state);
   log(state, `${name} is founded in ${startYear} — the ${eraOf(startYear).name.toLowerCase()} — with ${ap.city} (${hub}) as its hub. The board has set your first-year objectives.`, 'good');
+  return state;
+}
+
+// Bring an older save up to the current state shape.
+export function migrate(state) {
+  if (!state || typeof state !== 'object') return null;
+  if (state.version === SAVE_VERSION) return state;
+  if (state.version !== 4) return null;
+  for (const h of state.hubs) {
+    if (h.banks == null) {
+      h.banks = { 1: 0, 2: 3, 3: 5 }[h.bank] ?? 0;
+      h.autoBanks = (h.bank ?? 1) === 1;
+      h.discipline = h.bank === 3 ? 0.7 : 0.6;
+      h.terminal = 0;
+      h.terminalBuild = null;
+      delete h.bank;
+    }
+  }
+  state.autopilot ??= { ...defaultAutopilot(), pricing: false, fleet: false };
+  state.brands ??= [];
+  state.campaigns ??= [];
+  state.regulation ??= { openSkies: [], foreignCap: 0.25, notes: [] };
+  state.annual ??= [];
+  state.milestones ??= [];
+  state.shareHistory ??= [];
+  state.scenario ??= null;
+  state.airline.livery ??= defaultLivery(state.airline.color);
+  state.settings.regulation ??= 'historical';
+  state.weekCosts.campaigns ??= 0;
+  state.version = SAVE_VERSION;
   return state;
 }
 
@@ -127,7 +185,9 @@ export function objectiveProgress(state, o) {
   }
 }
 
-function yearEnd(state) {
+function yearEnd(state, year) {
+  annualReport(state, year);
+  regulationYearly(state);
   let delta = 0;
   for (const o of state.board.objectives) {
     const p = objectiveProgress(state, o);
@@ -179,13 +239,13 @@ function processDeliveries(state) {
       }
       const rate = loanRateFor(state, 'secured');
       const r = rate / 52;
-      const ac = makeAircraft(state, o.type, { owned: true, config: o.config, price: o.price });
+      const ac = makeAircraft(state, o.type, { owned: true, config: o.config, cabin: o.cabin, price: o.price });
       state.loans.push({ id: `ln${state.nextId++}`, kind: 'secured', principal: due, original: due, rate, payment: (due * r) / (1 - (1 + r) ** -624), weeksLeft: 624, aircraftId: ac.id });
       log(state, `${typeOf(ac).name} ${ac.reg} delivered, financed with a ${money(due)} aircraft loan.`, 'good', 'fleet');
     } else {
       state.cash -= due;
       state.ledgerCapex.aircraft += due;
-      const ac = makeAircraft(state, o.type, { owned: true, config: o.config, price: o.price });
+      const ac = makeAircraft(state, o.type, { owned: true, config: o.config, cabin: o.cabin, price: o.price });
       log(state, `New ${typeOf(ac).name} ${ac.reg} delivered from the factory.`, 'good', 'fleet');
     }
     state.orders = state.orders.filter((x) => x !== o);
@@ -256,6 +316,8 @@ export function advanceWeek(state) {
   timelineTick(state);
   weatherTick(state);
   processDeliveries(state);
+  terminalTick(state);
+  autoFleet(state);
   reserveContractHours(state);
   staffTick(state);
 
@@ -275,7 +337,10 @@ export function advanceWeek(state) {
   const routeSum = (f) => sum(legList, (l) => f(l.s));
   const leases = sum(delivered.filter((a) => !a.owned), (a) => weeklyFromMonthly(a.lease.monthly));
   const fleetValue = sum(delivered, (a) => aircraftValue(state, a));
-  const hubCosts = sum(state.hubs, (h) => 60e3 + (h.lounge ? 40e3 : 0) + (h.bank - 1) * 15e3) + (stations(state).length - state.hubs.length) * 8e3;
+  const hubCosts = sum(state.hubs, hubWeeklyCost) + (stations(state).length - state.hubs.length) * 8e3;
+  // Subsidiary brands fly with cheaper crew contracts on their routes.
+  const crewHoursAll = routeSum((s) => s.crewHours) || 1;
+  const crewSaving = sum(legList, (l) => (1 - (l.s.crewFactor ?? 1)) * (l.s.crewHours / crewHoursAll));
   const debt = serviceDebt(state);
 
   const revenue = {
@@ -289,8 +354,8 @@ export function advanceWeek(state) {
   };
   const cost = {
     fuel: routeSum((s) => s.cost.fuel),
-    pilots: pay.pilots,
-    cabin: pay.cabin,
+    pilots: pay.pilots * (1 - crewSaving),
+    cabin: pay.cabin * (1 - crewSaving),
     engineers: pay.engineers,
     ground: pay.ground,
     admin: pay.admin,
@@ -301,9 +366,10 @@ export function advanceWeek(state) {
     distribution: routeSum((s) => s.cost.distribution + s.cost.codeshare),
     disruption: routeSum((s) => s.cost.delays + s.cost.crewTravel),
     leases,
-    marketing: state.marketing,
+    marketing: state.marketing + (state.weekCosts.campaigns ?? 0),
+    carbon: routeSum((s) => s.cost.carbon),
     facilities: facilityUpkeep(state) + hubCosts,
-    overhead: 120e3 + delivered.length * 8e3 + (fleetValue * 0.0015) / 52 + state.weekCosts.recruiting + state.weekCosts.severance + state.weekCosts.hedging,
+    overhead: 120e3 + (state.brands?.length ?? 0) * BRAND_WEEKLY + delivered.length * 8e3 + (fleetValue * 0.0015) / 52 + state.weekCosts.recruiting + state.weekCosts.severance + state.weekCosts.hedging,
     incidents: state.weekCosts.incidents ?? 0,
     sga: 0.04 * (routeSumRevenue(legList) + contracts.revenue),
     contracts: contracts.cost + ventures.cost,
@@ -326,19 +392,19 @@ export function advanceWeek(state) {
   }
 
   // Already-paid items (checks, recruiting, hedges) left cash when they happened.
-  const prepaid = state.weekCosts.checks + state.weekCosts.recruiting + state.weekCosts.severance + state.weekCosts.hedging + (state.weekCosts.incidents ?? 0);
+  const prepaid = state.weekCosts.checks + state.weekCosts.recruiting + state.weekCosts.severance + state.weekCosts.hedging + (state.weekCosts.incidents ?? 0) + (state.weekCosts.campaigns ?? 0);
   state.cash += totalRevenue - (totalCost - cost.depreciation - prepaid) - debt.principal;
   applyInflation(state);
 
   // ---- Route-level profit (allocate crew pay by crew hours, ownership by aircraft hours)
-  const crewPay = pay.pilots + pay.cabin;
-  const crewHours = routeSum((s) => s.crewHours) || 1;
+  const crewPay = cost.pilots + cost.cabin;
+  const crewHours = sum(legList, (l) => l.s.crewHours * (l.s.crewFactor ?? 1)) || 1;
   const ownership = Object.fromEntries(delivered.map((a) => [a.id, a.owned ? ((a.acquiredPrice || typeOf(a).price * 0.5) * 0.9) / 1300 : weeklyFromMonthly(a.lease.monthly)]));
   const acHours = {};
   for (const l of legList) for (const [id, h] of Object.entries(l.s.acHours)) acHours[id] = (acHours[id] ?? 0) + h;
   for (const l of legList) {
     const s = l.s;
-    s.crewCost = crewPay * (s.crewHours / crewHours);
+    s.crewCost = crewPay * ((s.crewHours * (s.crewFactor ?? 1)) / crewHours);
     s.ownership = sum(Object.entries(s.acHours), ([id, h]) => (ownership[id] ?? 0) * (h / (acHours[id] || 1)));
     s.profit = s.contribution - s.crewCost - s.ownership;
     s.freq = Math.round(s.freq * 10) / 10;
@@ -356,6 +422,8 @@ export function advanceWeek(state) {
     5, 98,
   );
   state.reputation = clamp(state.reputation + (repTarget - state.reputation) * 0.04, 0, 100);
+  brandTick(state, serviceAppeal);
+  campaignTick(state);
 
   // ---- Stats & history
   const pax = routeSum((s) => s.paxTotal);
@@ -402,7 +470,7 @@ export function advanceWeek(state) {
   const cashCost = totalCost - cost.depreciation - cost.tax;
   state.history.push({
     week: state.week, revenue: totalRevenue, cost: totalCost, profit, pretax: profit + cost.tax, ebitda, cash: state.cash,
-    pax, seats, lf: report.lf, cargoKg, flights, otp, cashCost, sharePrice: 0,
+    pax, seats, lf: report.lf, cargoKg, flights, otp, cashCost, sharePrice: 0, co2: routeSum((s) => s.co2 ?? 0),
   });
   if (state.history.length > 520) state.history.shift();
   const mk = monthKey(state.week);
@@ -428,6 +496,9 @@ export function advanceWeek(state) {
 
   // ---- Calendar boundaries
   if (monthKey(state.week) !== prevMonth) {
+    autoBankTick(state);
+    shareTick(state);
+    scenarioTick(state);
     rivalsTick(state);
     refreshMarkets(state);
     replenishSlots(state);
@@ -439,8 +510,9 @@ export function advanceWeek(state) {
     boardReview(state);
     quarterlyRivalReset(state);
   }
-  if (yearOf(state.week) !== prevYear) yearEnd(state);
+  if (yearOf(state.week) !== prevYear) yearEnd(state, prevYear);
 
+  milestoneTick(state);
   const price = sharePrice(state);
   state.history[state.history.length - 1].sharePrice = price;
   report.sharePrice = price;
@@ -452,7 +524,13 @@ export function advanceWeek(state) {
     state.status = 'bankrupt';
     log(state, `${state.airline.name} has entered administration.`, 'bad');
   }
-  if (state.status !== 'playing') return ok({ report });
+  if (state.status !== 'playing') {
+    finalizeScenario(state);
+    return ok({ report });
+  }
+
+  // ---- Autopilot pricing for next week
+  autoPricing(state);
 
   state.weekCosts = zeroCosts();
   state.ledgerCapex = zeroCapex();

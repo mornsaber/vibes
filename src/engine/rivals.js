@@ -11,7 +11,9 @@ import { eraFuel, regionDemand } from '../data/eras.js';
 import { clamp, fail, ok, rand, randInt, randNormal, pick, weightedPick, log, money, pairKey, sum, yearOf, distanceKm } from './core.js';
 import { rivalsOn, sameMarket, rivalDef, rivalFliesNonstop, trafficRights, marketNow } from './market.js';
 import { makeAircraft, monthlyLeaseRate } from './fleet.js';
-import { openRoute, canOperate, maxFrequency, setFrequency, isHub } from './network.js';
+import { openRoute, canOperate, maxFrequency, setFrequency, isHub, newHub } from './network.js';
+import { foreignStakeCap } from './regulation.js';
+import { launchBrand } from './brands.js';
 import { staffRequirements, addToGrade } from './staff.js';
 import { marketCap, sharePrice } from './finance.js';
 
@@ -383,7 +385,9 @@ export function acquisitionTerms(state, id) {
   if (rs && state.fleet.length + rs.fleet > 500) reasons.push('Competition regulators would block a combination this large');
   const value = rs?.status === 'active' ? rivalValuation(state, id) : 0;
   const premium = rs?.margin < 0 ? 1.1 : 1.35;
-  return { reasons, price: value * premium, value, stakePrice: value * 0.25 * 1.2, domestic };
+  // Domestic stakes are 25%; foreign ones are capped by ownership rules (25% or, after liberalisation, 49%).
+  const stake = domestic ? 0.25 : foreignStakeCap(state);
+  return { reasons, price: value * premium, value, stake, stakePrice: value * stake * 1.2, domestic };
 }
 
 // Fleet types a carrier of this kind would plausibly fly in this year.
@@ -396,7 +400,7 @@ function typicalTypes(state, rtype) {
   return live;
 }
 
-export function acquireRival(state, id, payWith = 'cash') {
+export function acquireRival(state, id, payWith = 'cash', { asBrand = false } = {}) {
   const t = acquisitionTerms(state, id);
   if (t.reasons.length) return fail(t.reasons[0]);
   const r = rivalDef(state, id);
@@ -415,7 +419,7 @@ export function acquireRival(state, id, payWith = 'cash') {
   // Hubs in your home market join your network.
   for (const h of r.hubs) {
     if (!isHub(state, h) && sameMarket(state.airline.home, airportByCode[h].country)) {
-      state.hubs.push({ code: h, openedWeek: state.week, bank: 1, lounge: false, facilities: {} });
+      state.hubs.push(newHub(h, state.week));
       const ap = airportByCode[h];
       if (ap.slots) state.slots[h] = { held: (state.slots[h]?.held ?? 0) + (ap.slots === 2 ? 28 : 70), pool: state.slots[h]?.pool ?? 6 };
     }
@@ -445,13 +449,17 @@ export function acquireRival(state, id, payWith = 'cash') {
   }
   dests.sort((x, y) => y.m - x.m);
   let opened = 0;
+  const newRoutes = [];
   const cash = state.cash;
   const capex = state.ledgerCapex.other;
   state.cash = Infinity; // route launches are part of the deal
   for (const d of dests.slice(0, Math.ceil(n * 0.7))) {
     if (state.routes.some((x) => pairKey(x.a, x.b) === pairKey(d.a, d.b))) continue;
     const res = openRoute(state, d.a, d.b);
-    if (res.ok) opened += 1;
+    if (res.ok) {
+      opened += 1;
+      newRoutes.push(res.route);
+    }
   }
   state.cash = cash;
   state.ledgerCapex.other = capex;
@@ -471,6 +479,12 @@ export function acquireRival(state, id, payWith = 'cash') {
     w.morale = clamp(w.morale - 8, 0, 100);
     w.union.strength = clamp(w.union.strength + 0.05, 0, 1);
   }
+  // Keep the acquired airline flying under its own name as a subsidiary brand.
+  if (asBrand) {
+    const kind = r.type === 'lcc' || r.type === 'ulcc' ? 'lcc' : r.type === 'connector' ? 'premium' : 'regional';
+    const res = launchBrand(state, { name: r.name, code: r.code, kind, color: ['#e5484d', '#30a46c', '#8e4ec6', '#12a594'][(state.brands?.length ?? 0) % 4], rep: rs.rep });
+    if (res.ok) for (const route of newRoutes) route.brand = res.brand.id;
+  }
   rs.status = 'acquired';
   rs.acquiredBy = 'player';
   delete state.stakes[id];
@@ -485,14 +499,14 @@ export function buyStake(state, id) {
   const t = acquisitionTerms(state, id);
   if (state.rivals[id]?.status !== 'active' || r.type === 'cargo') return fail('Not available');
   if (state.stakes[id]) return fail('You already own a stake');
-  if (state.cash < t.stakePrice) return fail(`A 25% stake costs ${money(t.stakePrice)}`);
+  if (state.cash < t.stakePrice) return fail(`A ${Math.round(t.stake * 100)}% stake costs ${money(t.stakePrice)}`);
   state.cash -= t.stakePrice;
   state.ledgerCapex.other += t.stakePrice;
-  state.stakes[id] = 0.25;
+  state.stakes[id] = t.stake;
   if (!state.partners.codeshares.includes(id)) state.partners.codeshares.push(id);
   state.rivals[id].hostility = 0;
   state.rivals[id].relation = clamp(state.rivals[id].relation + 25, 0, 100);
-  log(state, `Bought a 25% stake in ${r.name} for ${money(t.stakePrice)}. A codeshare follows.`, 'good', 'rivals');
+  log(state, `Bought a ${Math.round(t.stake * 100)}% stake in ${r.name} for ${money(t.stakePrice)}. A codeshare follows.`, 'good', 'rivals');
   return ok();
 }
 
