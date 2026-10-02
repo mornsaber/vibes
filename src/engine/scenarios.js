@@ -1,7 +1,7 @@
 // Scenarios: preset starting positions with goals, a deadline and a score.
 // Free play keeps the normal open-ended game (with a running score).
 
-import { aircraftById } from '../data/aircraft.js';
+import { aircraftById, seatCount } from '../data/aircraft.js';
 import { ROLE_IDS } from '../data/business.js';
 import { airportByCode } from '../data/airports.js';
 import { clamp, sum, ok, fail, log, money, yearOf, weekOfYearStart, randInt } from './core.js';
@@ -10,6 +10,8 @@ import { openRoute, setFrequency, maxFrequency, canOperate, routeFreq, stations,
 import { staffRequirements, addToGrade, newWorkforce } from './staff.js';
 import { loanRateFor } from './finance.js';
 import { rivalDef, marketNow } from './market.js';
+import { routesForAircraft } from './fit.js';
+import { autoAssign } from './advisor.js';
 
 const yearProfit = (s, y) => sum(s.history.filter((h) => yearOf(h.week) === y), (h) => h.profit);
 const lastYearPax = (s) => sum(s.history.slice(-52), (h) => h.pax);
@@ -50,7 +52,7 @@ export const SCENARIOS = {
   lcc05: {
     name: 'Build a low-cost carrier',
     blurb: 'Berlin, 2005. Europe is open, the 737-800 is cheap to lease and everyone wants a €19 fare. Start with three jets and build a pan-European low-cost network.',
-    year: 2005, hub: 'BER', airline: { name: 'Zipp', code: 'ZP', color: '#f5a524', model: 'lcc' }, difficulty: 'normal', cash: 70e6,
+    year: 2005, hub: 'BER', airline: { name: 'Zipp', code: 'ZP', color: '#f5a524', model: 'lcc' }, difficulty: 'normal', cash: 100e6,
     fleet: [['b738', 8, 4]],
     routes: ['BCN', 'FCO', 'MAD', 'LIS', 'ATH', 'NAP', 'BUD', 'AYT'],
     fareIdx: 0.8,
@@ -86,6 +88,88 @@ export const SCENARIOS = {
       { id: 'routes', label: '40 routes', test: (s) => s.routes.length >= 40 },
       { id: 'regions', label: 'Serve 5 world regions', test: (s) => regions(s) >= 5 },
       { id: 'connect', label: 'Half of passengers connecting', test: (s) => (s.lastReport?.pax ?? 0) > 2e4 && s.lastReport.connecting / s.lastReport.pax >= 0.5 },
+      { id: 'profit', label: 'Profitable over the last 12 months', test: (s) => s.history.length >= 52 && sum(s.history.slice(-52), (h) => h.profit) > 0 },
+    ],
+  },
+  dereg78: {
+    name: 'Deregulation dash',
+    blurb: 'Nashville, 1978. The Airline Deregulation Act is about to tear up the rulebook: anyone can fly anywhere at any fare. Turn a sleepy local carrier into a national airline before the giants wake up.',
+    year: 1978, hub: 'BNA', airline: { name: 'Music City Air', code: 'MC', color: '#e93d82' }, difficulty: 'normal', cash: 80e6,
+    fleet: [['dc9', 4, 8], ['b727', 2, 10]],
+    routes: ['ATL', 'ORD', 'DFW', 'MEM', 'CLT', 'MCO'],
+    timeline: [{ year: 1978, month: 10, event: 'deregulation', severity: 1 }],
+    deadline: 1985,
+    goals: [
+      { id: 'routes', label: '30 routes', test: (s) => s.routes.length >= 30 },
+      { id: 'fleet', label: 'Fleet of 30 aircraft', test: (s) => s.fleet.length >= 30 },
+      { id: 'profit', label: 'A profitable 1984', test: (s) => yearProfit(s, 1984) > 0, final: true },
+    ],
+  },
+  concorde76: {
+    name: 'Supersonic flagship',
+    blurb: 'London, 1976. You have just taken delivery of two Concordes — the most glamorous and least economic airliners ever built. Keep the supersonic flag flying, make the airline the most admired in the world, and still turn a profit.',
+    year: 1976, hub: 'LHR', airline: { name: 'Britannic Airways', code: 'BR', color: '#12a594' }, difficulty: 'normal', cash: 220e6,
+    fleet: [['concorde', 2, 0], ['b742', 1, 4], ['b707', 2, 10], ['b732', 4, 5]],
+    routes: ['JFK', 'DXB', 'CAI', 'BOS', 'CDG', 'FRA', 'AMS', 'MAD'],
+    rep: 62, deadline: 1981,
+    goals: [
+      { id: 'sst', label: 'Still flying two or more Concordes', test: (s) => s.fleet.filter((a) => typeOf(a).cat === 'sst' && !a.retired).length >= 2, final: true },
+      { id: 'rep', label: 'Reputation 75+', test: (s) => s.reputation >= 75 },
+      { id: 'profit', label: 'A profitable calendar year', test: (s) => s.annual?.some((a) => a.profit > 0) },
+    ],
+  },
+  pandemic19: {
+    name: 'Pandemic winter',
+    blurb: 'Seattle, 2019. Business is booming and the order book is full. In March 2020 a pandemic will empty the skies. Survive it without losing the airline — or your reputation.',
+    year: 2019, hub: 'SEA', airline: { name: 'Cascade Airlines', code: 'CS', color: '#30a46c' }, difficulty: 'normal', cash: 120e6,
+    fleet: [['a320n', 6, 2], ['b38m', 4, 1], ['b789', 3, 3]],
+    routes: ['LAX', 'SFO', 'DEN', 'ORD', 'JFK', 'HNL', 'LAS', 'PHX', 'BOS', 'NRT', 'ICN'],
+    loans: 120e6, rep: 60,
+    timeline: [{ year: 2020, month: 3, event: 'pandemic', severity: 1.3 }],
+    deadline: 2024,
+    goals: [
+      { id: 'alive', label: 'Still flying on 1 January 2024', test: (s) => s.status === 'playing', final: true },
+      { id: 'rating', label: 'Credit rating B or better', test: (s) => ratingAtLeast(s, 'B'), final: true },
+      { id: 'rep', label: 'Reputation 55+', test: (s) => s.reputation >= 55, final: true },
+    ],
+  },
+  asia90: {
+    name: 'Asian tiger',
+    blurb: 'Singapore, 1990. Asia is the fastest-growing aviation market on earth. Build a network spanning the continents from the crossroads of Asia — and weather the 1997 financial crisis on the way.',
+    year: 1990, hub: 'SIN', airline: { name: 'Lion City Airways', code: 'LC', color: '#e5484d' }, difficulty: 'normal', cash: 200e6,
+    fleet: [['a306', 4, 2], ['b744', 2, 0], ['a320c', 4, 1]],
+    routes: ['BKK', 'KUL', 'HKG', 'CGK', 'MNL', 'TPE', 'BOM', 'SYD'],
+    timeline: [{ year: 1997, month: 7, event: 'asian_crisis', severity: 1.2 }],
+    deadline: 2005,
+    goals: [
+      { id: 'routes', label: '50 routes', test: (s) => s.routes.length >= 50 },
+      { id: 'regions', label: 'Serve 5 world regions', test: (s) => regions(s) >= 5 },
+      { id: 'fleet', label: 'Fleet of 60 aircraft', test: (s) => s.fleet.length >= 60 },
+    ],
+  },
+  outback12: {
+    name: 'Outback and islands',
+    blurb: 'Brisbane, 2012. Mining towns, outback communities and Pacific islands need air links, and nobody else wants to fly turboprops to them. Build a regional network that pays.',
+    year: 2012, hub: 'BNE', airline: { name: 'Southern Cross Regional', code: 'SX', color: '#f5a524' }, difficulty: 'normal', cash: 120e6,
+    fleet: [['dhc6s4', 2, 1], ['q400', 3, 3], ['atr72', 2, 2]],
+    routes: ['CNS', 'SYD', 'MEL', 'ADL', 'ASP', 'AYQ'],
+    deadline: 2018,
+    goals: [
+      { id: 'routes', label: '20 routes', test: (s) => s.routes.length >= 20 },
+      { id: 'pax', label: '1 million passengers in a year', test: (s) => lastYearPax(s) >= 1e6 },
+      { id: 'profit', label: 'Profitable over the last 12 months', test: (s) => s.history.length >= 52 && sum(s.history.slice(-52), (h) => h.profit) > 0 },
+    ],
+  },
+  lcclong15: {
+    name: 'Low-cost long-haul',
+    blurb: 'Oslo, 2015. Fuel-efficient 787s make it possible to sell transatlantic seats for the price of a train ticket. Many have tried; most have failed. Build a profitable low-cost long-haul airline.',
+    year: 2015, hub: 'OSL', airline: { name: 'Aurora Long-Haul', code: 'AU', color: '#8e4ec6', model: 'lcc' }, difficulty: 'normal', cash: 260e6,
+    fleet: [['b789', 3, 1], ['b38m', 4, 0]],
+    routes: ['JFK', 'LAX', 'BKK', 'BCN', 'LGW', 'FCO', 'AGP', 'PMI'],
+    fareIdx: 0.8, deadline: 2020,
+    goals: [
+      { id: 'intercont', label: '15 intercontinental routes', test: (s) => intercontinental(s) >= 15 },
+      { id: 'wide', label: '15 widebodies', test: (s) => s.fleet.filter((a) => ['wide', 'jumbo'].includes(typeOf(a).cat)).length >= 15 },
       { id: 'profit', label: 'Profitable over the last 12 months', test: (s) => s.history.length >= 52 && sum(s.history.slice(-52), (h) => h.profit) > 0 },
     ],
   },
@@ -131,11 +215,16 @@ export function setupScenario(state, id) {
       if (ap.slots) state.slots[code] = { held: (state.slots[code]?.held ?? 0) + 14, pool: state.slots[code]?.pool ?? 6 };
     }
   }
-  // Schedule: spread the fleet over the routes.
-  for (const ac of state.fleet) {
-    const seatsPerMarket = (r) => sum(Object.values(routeCapacity(state, r)).slice(0, 4)) / marketNow(state, r.a, r.b);
-    const options = state.routes.filter((r) => canOperate(state, ac, r).ok && maxFrequency(state, ac, r) > 0).sort((a, b) => seatsPerMarket(a) - seatsPerMarket(b) || b.distance - a.distance);
-    for (const r of options) if (setFrequency(state, ac.id, r.id, Math.min(14, maxFrequency(state, ac, r)), { autoSlots: false }).ok) break;
+  // Schedule: biggest aircraft first, each onto the route where it earns most
+  // (sized to demand). Aircraft with nowhere sensible to go start idle.
+  const bySize = [...state.fleet].sort((a, b) => seatCount(b.config) - seatCount(a.config));
+  for (const ac of bySize) {
+    const options = routesForAircraft(state, ac, { includeNew: false, limit: 20 });
+    // Profitable routes first; an unserved route beats leaving the aircraft idle.
+    for (const pick of [...options.filter((x) => x.profit > 0), ...options.filter((x) => x.profit <= 0 && !x.served)]) {
+      const r = state.routes.find((x) => x.id === pick.routeId);
+      if (autoAssign(state, ac, r, Math.min(maxFrequency(state, ac, r), Math.max(pick.freq, 3))).ok) break;
+    }
   }
   // Staff for the operation (plus any legacy overstaffing).
   const req = staffRequirements(state);

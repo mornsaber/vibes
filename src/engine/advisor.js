@@ -8,7 +8,7 @@ import { fareNow, DEFAULT_RM } from './market.js';
 import { brandOf, brandKind } from './brands.js';
 import { typeOf, isDelivered, isFreighter } from './fleet.js';
 import {
-  canOperate, maxFrequency, setFrequency, routeFreq, routeById, entryFreq, closeRoute, scheduledHours, availableHours, seasonOf, setSchedule, roundTripHours, scheduleVersion,
+  canOperate, maxFrequency, setFrequency, routeFreq, routeById, entryFreq, closeRoute, scheduledHours, availableHours, seasonOf, setSchedule, roundTripHours, scheduleVersion, slotInfo,
 } from './network.js';
 
 export const defaultAutopilot = () => ({ pricing: true, rm: true, fleet: true, targetLF: 0.84 });
@@ -61,7 +61,28 @@ function needScore(state, ac, r) {
   return spill(r) / Math.max(1, r.last.seatTotal) + (r.last.lf > 0.9 ? 0.5 : 0) + (r.last.profit > 0 ? 0.2 : 0);
 }
 
-const noFit = new WeakMap();
+// Assign within the slots we hold, buying more with up to 10% of cash; if that
+// isn't enough, fly fewer frequencies. Returns the setFrequency result.
+export function autoAssign(state, ac, r, freq, current = 0) {
+  let room = Infinity;
+  let price = 0;
+  for (const code of [r.a, r.b]) {
+    const info = slotInfo(state, code);
+    if (!info) continue;
+    room = Math.min(room, info.held - info.used);
+    price = Math.max(price, info.price);
+  }
+  const extra = freq - current;
+  if (extra > room) {
+    // Buy as many slot pairs as 10% of cash allows, and fly what fits.
+    const affordable = price > 0 ? Math.floor((state.cash * 0.1) / price) : 0;
+    const buy = Math.min(extra - Math.max(0, room), Math.max(0, affordable));
+    freq = current + Math.max(0, room) + buy;
+    if (freq - current < (current ? 1 : 3)) return fail('No slots');
+    return setFrequency(state, ac.id, r.id, freq, { autoSlots: buy > 0 });
+  }
+  return setFrequency(state, ac.id, r.id, freq, { autoSlots: false });
+}
 
 // Weekly: put idle aircraft to work on the routes with the most unmet demand.
 export function autoFleet(state) {
@@ -70,24 +91,25 @@ export function autoFleet(state) {
   for (const ac of state.fleet) {
     if (ac.schedule.length || ac.contractHours || ac.retired || ac.grounded || ac.deliveryWeek > state.week + 2) continue;
     // An aircraft that fitted nowhere is retried monthly or when the network changes.
-    const miss = noFit.get(ac);
+    // (Kept on the aircraft so a reloaded save behaves identically.)
+    const miss = ac.autoMiss;
     if (miss && miss.routes === state.routes.length && state.week - miss.week < 4) continue;
-    const best = state.routes.map((r) => ({ r, score: needScore(state, ac, r) })).filter((x) => x.score > 0).sort((a, b) => b.score - a.score)[0];
-    if (!best) {
-      noFit.set(ac, { routes: state.routes.length, week: state.week });
-      continue;
+    const ranked = state.routes.map((r) => ({ r, score: needScore(state, ac, r) })).filter((x) => x.score > 0).sort((a, b) => b.score - a.score);
+    let placed = false;
+    // Try the neediest routes in turn (a slot-constrained one may not fit).
+    for (const { r } of ranked.slice(0, 5)) {
+      // Fill the shortfall but stay sensible: a daily-ish rotation, or whatever the aircraft can do.
+      const want = !routeFreq(state, r) ? 14 : Math.max(3, Math.ceil(spill(r) / 2 / Math.max(1, sum(CLASSES, (c) => ac.config[c] || 0) * 0.85)));
+      const freq = Math.min(maxFrequency(state, ac, r), want);
+      if (freq < 1 || !autoAssign(state, ac, r, freq).ok) continue;
+      const got = entryFreq(ac, r.id);
+      done.push({ ac: ac.reg, route: `${r.a}–${r.b}`, freq: got });
+      log(state, `Autopilot: ${ac.reg} assigned to ${r.a}–${r.b} (${got}×/wk).`, 'info', 'network');
+      placed = true;
+      break;
     }
-    const r = best.r;
-    // Fill the shortfall but stay sensible: a daily-ish rotation, or whatever the aircraft can do.
-    const want = !routeFreq(state, r) ? 14 : Math.max(3, Math.ceil(spill(r) / 2 / Math.max(1, sum(CLASSES, (c) => ac.config[c] || 0) * 0.85)));
-    const freq = Math.min(maxFrequency(state, ac, r), want);
-    if (freq < 1) continue;
-    const res = setFrequency(state, ac.id, r.id, freq, { autoSlots: false });
-    if (!res.ok) noFit.set(ac, { routes: state.routes.length, week: state.week });
-    if (res.ok) {
-      done.push({ ac: ac.reg, route: `${r.a}–${r.b}`, freq });
-      log(state, `Autopilot: ${ac.reg} assigned to ${r.a}–${r.b} (${freq}×/wk).`, 'info', 'network');
-    }
+    if (placed) delete ac.autoMiss;
+    else ac.autoMiss = { routes: state.routes.length, week: state.week };
   }
   // Rebalance: if routes sit unserved, move one aircraft a week off a route
   // that has several aircraft and is running badly empty.
@@ -103,7 +125,7 @@ export function autoFleet(state) {
       const from = routeById(state, ac.schedule[0].routeId);
       const before = ac.schedule;
       setSchedule(state, ac, []);
-      const res = setFrequency(state, ac.id, to.id, Math.min(14, maxFrequency(state, ac, to)), { autoSlots: false });
+      const res = autoAssign(state, ac, to, Math.min(14, maxFrequency(state, ac, to)));
       if (!res.ok) {
         setSchedule(state, ac, before);
         continue;
@@ -123,7 +145,7 @@ export function autoFleet(state) {
       if (!r?.last || r.last.lf < 0.9 || e.season) continue;
       const max = maxFrequency(state, ac, r);
       if (max > e.freq) {
-        const res = setFrequency(state, ac.id, r.id, Math.min(max, e.freq + 3), { autoSlots: false });
+        const res = autoAssign(state, ac, r, Math.min(max, e.freq + 3), e.freq);
         if (res.ok) done.push({ ac: ac.reg, route: `${r.a}–${r.b}`, freq: e.freq });
         break;
       }

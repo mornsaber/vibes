@@ -161,6 +161,37 @@ export const LIFE_LIMIT_YEARS = 45;
 
 export const aircraftById = Object.fromEntries(AIRCRAFT.map((a) => [a.id, a]));
 
+// Families share type ratings, spares and tooling: flying one family is
+// cheaper than flying several. Types not listed are a family of their own.
+export const FAMILIES = {
+  'Airbus A320 family': ['a318', 'a319n', 'a320n', 'a321n', 'a321xlr', 'a320c', 'a321c', 'a321f'],
+  'Boeing 737 NG/MAX': ['b733', 'b738', 'b38m', 'b3xm', 'b738f'],
+  'Boeing 737 Original': ['b732'],
+  'Boeing 757/767': ['b752', 'b762', 'b763', 'b752f', 'b763f'],
+  'Boeing 777': ['b772', 'b77w', 'b779', 'b77f', 'b77wsf'],
+  'Boeing 787': ['b788', 'b789', 'b78x'],
+  'Boeing 747': ['b741', 'b742', 'b74sp', 'b744', 'b748', 'b742f', 'b744f', 'b748f'],
+  'Airbus A330/A340': ['a333', 'a339', 'a343', 'a346', 'a332f'],
+  'Airbus A350': ['a359', 'a35k', 'a350f'],
+  'Airbus A300/A310': ['a300', 'a306', 'a310'],
+  'Airbus A220': ['a221', 'a223'],
+  'Embraer E-Jet': ['e175', 'e190', 'e195e2'],
+  'Embraer ERJ': ['erj135', 'erj145'],
+  'Bombardier CRJ': ['crj2', 'crj7', 'crj9'],
+  'ATR 42/72': ['atr42', 'atr725', 'atr72', 'atr72f'],
+  'Dash 8': ['dh8a', 'dh8c', 'q400'],
+  'DC-9/MD-80/717': ['dc9', 'md80', 'md90', 'b717'],
+  'DC-10/MD-11': ['dc10', 'md11', 'dc10f', 'md11f'],
+  'Fokker 70/100': ['f70', 'f100'],
+  'Fokker F27/50': ['f27', 'f50'],
+  'Twin Otter': ['dhc6', 'dhc6s4'],
+  'Boeing 707': ['b707', 'b707f'],
+  'Boeing 727': ['b727', 'b727f'],
+  'Douglas DC-8': ['dc8', 'dc8f'],
+};
+const familyIndex = Object.fromEntries(Object.entries(FAMILIES).flatMap(([f, ids]) => ids.map((id) => [id, f])));
+export const familyOf = (typeId) => familyIndex[typeId] ?? aircraftById[typeId]?.name ?? typeId;
+
 export const CATEGORY_LABELS = {
   commuter: 'Commuter',
   prop: 'Piston airliner',

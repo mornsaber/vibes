@@ -327,3 +327,27 @@ table.slots .dot { display: inline-block; width: 12px; height: 12px; border-radi
 .tut-steps li.done a { color: var(--good); text-decoration: line-through; }
 .tut-steps li.now a { font-weight: 700; }
 @media (max-width: 700px) { .tutorial { left: 16px; right: 16px; width: auto; bottom: 8px; } }
+
+/* ---- Cleanup helpers ---- */
+.row.nowrap { flex-wrap: nowrap; }
+.inline-fields { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: flex-end; }
+.inline-fields label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.inline-fields label span { display: inline-flex; align-items: center; gap: 4px; color: var(--text); }
+details > summary { cursor: pointer; padding: 2px 0; list-style-position: inside; }
+details[open] > summary { margin-bottom: 10px; }
+.actions-cell { display: flex; gap: 4px; align-items: center; flex-wrap: nowrap; justify-content: flex-end; }
+.actions-cell input { width: 52px; }
+td.wrap { white-space: normal; min-width: 180px; }
+.field.narrow { max-width: 460px; }
+@media (max-width: 860px) {
+  .topbar .date { flex: 1; }
+  .topbar .stats { order: 3; width: 100%; flex: none; justify-content: space-between; gap: 4px 10px; }
+  .topbar .time { order: 4; }
+  .topbar .stat b { font-size: 14px; }
+}
+
+/* Cabin floor plan */
+.floorplan { display: flex; height: 26px; border: 1px solid var(--border); border-radius: 13px 6px 6px 13px; overflow: hidden; margin: 4px 0 10px; background: var(--panel-2); }
+.floorplan span { display: flex; align-items: center; justify-content: center; color: #fff; font-size: 11px; white-space: nowrap; overflow: hidden; min-width: 2px; border-right: 1px solid rgba(0, 0, 0, 0.25); }
+.floorplan span.free { background: repeating-linear-gradient(45deg, transparent 0 6px, var(--border) 6px 7px); border-right: none; }
+.field label .dot { margin-right: 5px; }

@@ -461,6 +461,12 @@ document.addEventListener('change', (e) => {
   if (handler) run(handler, el);
 });
 
+// <details data-ui="key"> remember whether they're open across re-renders.
+document.addEventListener('toggle', (e) => {
+  const key = e.target?.dataset?.ui;
+  if (key) ctx.ui[key] = e.target.open;
+}, true);
+
 document.addEventListener('input', (e) => {
   const el = e.target.closest('[data-live]');
   const handler = el && ACTIONS[`live:${el.dataset.live}`];

@@ -8,7 +8,7 @@ import { MRO_PROVIDERS } from '../data/aircraft.js';
 import { eraFuel, eraRate, eraOf, cpiIndex, histInflation } from '../data/eras.js';
 import { PRESETS, makeSettings } from '../data/difficulty.js';
 import { clamp, sum, fail, ok, rand, randNormal, log, money, monthKey, quarterKey, yearOf, weeksInUnit, weekOfYearStart, elapsed, setPriceLevel, dayOfYear } from './core.js';
-import { typeOf, isDelivered, makeAircraft, refreshMarkets, removeAircraft, weeklyFromMonthly, aircraftValue } from './fleet.js';
+import { typeOf, isDelivered, makeAircraft, refreshMarkets, removeAircraft, weeklyFromMonthly, aircraftValue, commonality } from './fleet.js';
 import { replenishSlots, stations, scheduleChanged, newHub, hubWeeklyCost, autoBankTick, terminalTick } from './network.js';
 import { autoPricing, autoFleet, defaultAutopilot } from './advisor.js';
 import { brandTick, campaignTick, defaultLivery, BRAND_WEEKLY } from './brands.js';
@@ -31,7 +31,7 @@ export const DIFFICULTY = PRESETS;
 
 const zeroCosts = () => ({ checks: 0, recruiting: 0, severance: 0, hedging: 0, incidents: 0, campaigns: 0 });
 
-export const SAVE_VERSION = 6;
+export const SAVE_VERSION = 7;
 export const HISTORY_WEEKS = 312;
 const round3 = (x) => Math.round(x * 1000) / 1000;
 const zeroCapex = () => ({ aircraft: 0, retrofits: 0, facilities: 0, slots: 0, other: 0 });
@@ -113,6 +113,7 @@ function createGame({ name = 'Skyward Air', code = 'SK', hub = 'ORD', seed, diff
     shareHistory: [],
     scenario: null,
     restructuring: null,
+    layouts: {},
     tutorial: newTutorial(true),
   };
   setPriceLevel(state.macro.priceLevel);
@@ -121,7 +122,7 @@ function createGame({ name = 'Skyward Air', code = 'SK', hub = 'ORD', seed, diff
     state.marketing = 80e3;
   }
   // Founding team hired before launch: enough crew for the first couple of narrowbodies.
-  for (const r of ROLE_IDS) state.staff[r] = newWorkforce(state, r, { pilots: 24, cabin: 60, engineers: 12, ground: 50, admin: 45 }[r]);
+  for (const r of ROLE_IDS) state.staff[r] = newWorkforce(state, r, { pilots: 24, cabin: 60, engineers: 12, ground: 50, admin: 18 }[r]);
   if (ap.slots) state.slots[hub] = { held: ap.slots === 2 ? 42 : 70, pool: ap.slots === 2 ? 6 : 60 };
   initRivals(state);
   buildTimeline(state);
@@ -146,7 +147,8 @@ export function resetBoard(state) {
 export function migrate(state) {
   if (!state || typeof state !== 'object') return null;
   if (state.version === SAVE_VERSION) return state;
-  if (state.version !== 4 && state.version !== 5) return null;
+  if (![4, 5, 6].includes(state.version)) return null;
+  if (state.version === 6) return migrate6to7(state);
   if (state.version === 5) return migrate5to6(state);
   for (const h of state.hubs) {
     if (h.banks == null) {
@@ -180,6 +182,13 @@ function migrate5to6(state) {
   state.settings.restructuring ??= 'available';
   while (state.history.length > HISTORY_WEEKS) state.history.shift();
   for (const ac of state.fleet) if (ac.mxLog?.length > 6) ac.mxLog = ac.mxLog.slice(0, 6);
+  state.version = 6;
+  return migrate6to7(state);
+}
+
+// v7: standard cabin layouts for new orders.
+function migrate6to7(state) {
+  state.layouts ??= {};
   state.version = SAVE_VERSION;
   return state;
 }
@@ -402,7 +411,7 @@ export function advanceWeek(state) {
     marketing: state.marketing + (state.weekCosts.campaigns ?? 0),
     carbon: routeSum((s) => s.cost.carbon),
     facilities: facilityUpkeep(state) + hubCosts,
-    overhead: 120e3 + (state.brands?.length ?? 0) * BRAND_WEEKLY + delivered.length * 8e3 + (fleetValue * 0.0015) / 52 + state.weekCosts.recruiting + state.weekCosts.severance + state.weekCosts.hedging,
+    overhead: 120e3 + commonality(state).overhead + (state.brands?.length ?? 0) * BRAND_WEEKLY + delivered.length * 8e3 + (fleetValue * 0.0015) / 52 + state.weekCosts.recruiting + state.weekCosts.severance + state.weekCosts.hedging,
     incidents: state.weekCosts.incidents ?? 0,
     sga: 0.04 * (routeSumRevenue(legList) + contracts.revenue),
     contracts: contracts.cost + ventures.cost,

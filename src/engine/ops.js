@@ -4,7 +4,7 @@
 // allocate seats leg by leg, and produce route-level revenue and costs.
 
 import { airportByCode } from '../data/airports.js';
-import { CLASSES, productQ, defaultCabin } from '../data/aircraft.js';
+import { CLASSES, productQ, defaultCabin, familyOf } from '../data/aircraft.js';
 import { SERVICE, SERVICE_IDS } from '../data/business.js';
 import { rivalById } from '../data/rivals.js';
 import { clamp, sum, distanceKm, randNormal, pairKey, yearOf } from './core.js';
@@ -14,7 +14,7 @@ import {
   priceEffect, rivalsOn, rivalsContext, rivalAppeal, rivalAppealFast, OUTSIDE_OPTION, sameMarket, rivalDef,
   priceSensitiveShare, flexMult, advMult, MARKET_SPREAD, DEFAULT_RM, FLEX_ELASTICITY, ADV_ELASTICITY, seasonalFare,
 } from './market.js';
-import { typeOf, isOperational, isFreighter, fuelFactor, productQuality, ageYears } from './fleet.js';
+import { typeOf, isOperational, isFreighter, fuelFactor, productQuality, ageYears, commonality } from './fleet.js';
 import { blockHours, roundTripHours, availableHours, scheduledHours, isHub, utilization, noiseBanned, activeSchedule, seasonOf, hubConnectionQuality, terminalLevel, TERMINAL_EFFECT, cargoCapacity } from './network.js';
 import { brandOf, brandKind, brandRep, brandService, campaignEffect } from './brands.js';
 import { carbonCost } from './regulation.js';
@@ -22,9 +22,9 @@ import { dispatchReliability } from './maintenance.js';
 import { crewFactor, cockpitCrew, cabinCrewPerFlight } from './staff.js';
 import { airspaceFuelMult, tickShockRegions } from './safety.js';
 
-const MX_HR = { tiny: 120, small: 350, narrow: 550, wide: 1300, jumbo: 2000 };
-const NAV_KM = { tiny: 0.1, small: 0.35, narrow: 0.7, wide: 1.4, jumbo: 2.0 };
-const LANDING = { tiny: 120, small: 600, narrow: 1500, wide: 4500, jumbo: 7000 };
+export const MX_HR = { tiny: 120, small: 350, narrow: 550, wide: 1300, jumbo: 2000 };
+export const NAV_KM = { tiny: 0.1, small: 0.35, narrow: 0.7, wide: 1.4, jumbo: 2.0 };
+export const LANDING = { tiny: 120, small: 600, narrow: 1500, wide: 4500, jumbo: 7000 };
 const ALL = [...CLASSES, 'C'];
 
 // Appeal of the cabin product given service standards (long flights magnify catering/comfort).
@@ -327,6 +327,7 @@ export function simulateOperations(state, { fuelPrice, macro }) {
   const svcPerHour = sum(SERVICE_IDS.filter((k) => !SERVICE[k].perPax), (k) => SERVICE[k].cost[state.service[k] - 1]);
   const svcPerPax = sum(SERVICE_IDS.filter((k) => SERVICE[k].perPax), (k) => SERVICE[k].cost[state.service[k] - 1]);
   const lineMx = state.hubs.some((h) => h.facilities.line && h.facilities.line.readyWeek <= state.week) ? 0.85 : 1;
+  const com = commonality(state);
   for (const leg of Object.values(legs)) {
     const { route, s, entries } = leg;
     const A = airportByCode[route.a];
@@ -353,7 +354,7 @@ export function simulateOperations(state, { fuelPrice, macro }) {
       const fuelKg = flights * type.burn * route.distance * reroute * fuelFactor(state, ac) * (0.92 + 0.1 * lf);
       s.fuelKg += fuelKg;
       s.cost.fuel += fuelKg * fuelPrice;
-      s.cost.maintenance += hours * MX_HR[mx] * (1 + ageYears(state, ac) * 0.03) * lineMx * (kc.maintenance ?? 1);
+      s.cost.maintenance += hours * MX_HR[mx] * (1 + ageYears(state, ac) * 0.03) * lineMx * (kc.maintenance ?? 1) * (com.mx[familyOf(ac.type)] ?? 1);
       s.cost.navigation += flights * route.distance * NAV_KM[mx];
       s.cost.landing += flights * LANDING[mx] * fee;
       const cockpit = type.cockpit ?? cockpitCrew(bh) + (type.fe ? 1 : 0);

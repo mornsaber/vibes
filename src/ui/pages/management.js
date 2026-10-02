@@ -4,11 +4,13 @@ import { hubsPanel } from './planning.js';
 import { settingsEditor, parseSetting } from './start.js';
 import { render as cargoRender } from './cargo.js';
 
-const TABS = [['airline', 'Airline'], ['autopilot', 'Autopilot'], ['brands', 'Subsidiaries'], ['branding', 'Brand & campaigns'], ['subsidies', 'Subsidies'], ['stats', 'Statistics'], ['hubs', 'Hubs'], ['service', 'Service standards'], ['codeshare', 'Codeshare & alliances'], ['staffing', 'Staffing'], ['cargo', 'Cargo']];
+// Hubs and cargo have their own pages; old links to them still work.
+const TABS = [['airline', 'Airline'], ['autopilot', 'Autopilot'], ['staffing', 'Staffing'], ['service', 'Service & marketing'], ['brands', 'Brands & campaigns'], ['codeshare', 'Partners'], ['subsidies', 'Subsidies'], ['stats', 'Statistics']];
 
 export function render(c) {
-  const tab = c.params[0] ?? 'airline';
-  const body = { airline, autopilot, brands, branding, subsidies, stats, hubs: (x) => hubsPanel(x.state), service, codeshare, staffing, cargo: (x) => cargoRender({ ...x, params: ['overview'] }, true) }[tab] ?? airline;
+  let tab = c.params[0] ?? 'airline';
+  if (tab === 'branding') tab = 'brands';
+  const body = { airline, autopilot, brands: (x) => brands(x) + branding(x), subsidies, stats, hubs: (x) => hubsPanel(x.state), service, codeshare, staffing, cargo: (x) => cargoRender({ ...x, params: ['overview'] }, true) }[tab] ?? airline;
   return `<div class="page-head"><h1>Management</h1></div>${tabs('management', TABS, tab)}${body(c)}`;
 }
 
@@ -23,7 +25,6 @@ function airline(c) {
       <div class="field"><label>Slogan</label><input name="slogan" value="${esc(a.slogan)}" maxlength="60" placeholder="e.g. The friendly skies"></div>
       <button class="primary" data-action="save-airline">Save</button>
     </div>`)}
-    ${panel('Game settings', `${settingsEditor(s.settings, 'game-setting', { inGame: true })}<p class="muted small">Preset at founding: ${esc(G.PRESETS[s.settings.preset]?.label ?? 'Custom')}. Changes apply from next week. Prices are ${num(s.macro.priceLevel ?? 1, 2)}× 2027 levels; inflation is running at ${pct(s.macro.inflation ?? 0, 1)} a year.</p>`)}
     ${panel('Board of directors', `${statement([
       ['Confidence', `${bar(s.board.confidence, 100)} ${Math.round(s.board.confidence)}/100`],
       ['Quarterly reviews held', s.board.reviews],
@@ -35,7 +36,9 @@ function airline(c) {
       { h: 'Now', v: (o) => esc(G.objectiveProgress(s, o).value) },
       { h: '', v: (o) => (G.objectiveProgress(s, o).met ? pill('Met', 'good') : pill('Open', 'warn')) },
     ])}<p class="muted small">Each objective met at year end adds 7 confidence; each missed costs 6.</p>`)}
-  </div>`;
+  </div>
+  ${panel('', `<details ${c.ui.settingsOpen ? 'open' : ''} data-ui="settingsOpen"><summary><b>Game settings</b> <small class="muted">${esc(G.PRESETS[s.settings.preset]?.label ?? 'Custom')} preset · changes apply from next week</small></summary>
+    ${settingsEditor(s.settings, 'game-setting', { inGame: true })}<p class="muted small">Prices are ${num(s.macro.priceLevel ?? 1, 2)}× 2027 levels; inflation is running at ${pct(s.macro.inflation ?? 0, 1)} a year.</p></details>`)}`;
 }
 
 function autopilot(c) {
@@ -81,7 +84,7 @@ function brands(c) {
     { h: '', v: (r) => (r.brand.id === 'main' ? '' : `<button class="small danger" data-action="close-brand" data-id="${r.brand.id}">Fold in</button>`) },
   ]))}
   <div class="grid cols-2">
-    ${panel('Launch a brand', `<div class="stack" data-form>
+    ${panel('Launch a subsidiary brand', `<div class="stack" data-form>
       <div class="grid cols-2 tight"><div class="field"><label>Name</label><input name="name" placeholder="e.g. ${esc(s.airline.name.split(' ')[0])} Express" maxlength="28"></div>
       <div class="field"><label>Code</label><input name="code" maxlength="2" placeholder="XX"></div></div>
       <div class="grid cols-2 tight"><div class="field"><label>Type</label><select name="kind">${options(kindOptions, 'lcc')}</select></div>
@@ -298,10 +301,10 @@ function roleDetail(c, role) {
       { h: 'Staff', cls: 'num', v: (g) => `${int(w.grades[g])}${targets[g] != null ? `<small class="muted"> / ${int(targets[g])}</small>` : ''}` },
       { h: 'Salary', cls: 'num', v: (g) => money(G.weeklySalary(s, role, g) * 52) },
       { h: 'Avg tenure', cls: 'num', v: (g) => `${num(w.tenure[g], 1)} y` },
-      { h: '', v: (g) => `<div class="row" data-form><input type="number" name="n" value="1" min="1" class="w-60">
+      { h: '', cls: 'num', v: (g) => `<div class="actions-cell" data-form><input type="number" name="n" value="1" min="1" aria-label="How many">
         ${g < 4 ? `<button class="small" data-action="promote" data-role="${role}" data-g="${g}" title="Promote to ${esc(R.grades[g + 1].title)}">▲</button>` : ''}
         ${g > 0 ? `<button class="small" data-action="demote" data-role="${role}" data-g="${g}" title="Demote to ${esc(R.grades[g - 1].title)}">▼</button>` : ''}
-        <button class="small" data-action="hire" data-role="${role}" data-g="${g}" title="Hire from outside">+ Hire</button>
+        <button class="small" data-action="hire" data-role="${role}" data-g="${g}" title="Hire from outside">Hire</button>
         <button class="small danger" data-action="fire" data-role="${role}" data-g="${g}" title="Lay off">✕</button></div>` },
     ])}
     ${w.pipeline.length ? `<p class="small">In training: ${w.pipeline.map((p) => `${p.n} ${esc(R.grades[p.grade ?? 0].title)}${p.n > 1 ? 's' : ''} (${p.ready - s.week} wk)`).join(', ')}</p>` : ''}

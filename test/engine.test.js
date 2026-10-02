@@ -1191,7 +1191,7 @@ test('save slots compress, list, rename, copy, delete, snapshot and import', asy
   assert.ok(!res.ok && /storage is full/.test(res.error));
 });
 
-test('version 5 saves migrate to version 6', () => {
+test('version 5 saves migrate to the current version', () => {
   const s = setup();
   run(s, 2);
   const old = JSON.parse(JSON.stringify(s));
@@ -1199,10 +1199,170 @@ test('version 5 saves migrate to version 6', () => {
   delete old.tutorial;
   delete old.restructuring;
   delete old.settings.restructuring;
+  delete old.layouts;
   const m = G.migrate(old);
-  assert.equal(m.version, 6);
+  assert.equal(m.version, G.SAVE_VERSION);
+  assert.deepEqual(m.layouts, {});
   assert.equal(m.settings.restructuring, 'available');
   assert.equal(m.tutorial.on, false);
   run(m, 2);
   assert.equal(m.status, 'playing');
+});
+
+// ---------------------------------------------------------------------------
+// Fleet–route matching, slot-aware autopilot and head-office staffing.
+
+test('the route finder ranks routes an aircraft can fly and assigns them', () => {
+  const s = setup();
+  manual(s);
+  const { route: near } = G.openRoute(s, 'DEN', 'SLC');
+  G.openRoute(s, 'DEN', 'LHR');
+  const ac = quickLease(s, 'e175');
+  const list = G.routesForAircraft(s, ac, { limit: 30 });
+  assert.ok(list.length > 0);
+  assert.ok(list.every((x) => x.distance <= G.typeOf(ac).range), 'within range');
+  assert.ok(!list.some((x) => x.b === 'LHR' || x.a === 'LHR'), 'too far');
+  assert.ok(list.some((x) => x.kind === 'existing' && x.routeId === near.id));
+  assert.ok(list.some((x) => x.kind === 'new'), 'new routes from the hub');
+  for (let i = 1; i < list.length; i++) assert.ok(list[i - 1].profit >= list[i].profit, 'sorted by profit');
+  // Assign to a brand-new route: it is opened and flown.
+  const fresh = list.find((x) => x.kind === 'new');
+  const before = s.routes.length;
+  assert.ok(G.assignSuggestion(s, ac.id, fresh).ok);
+  assert.equal(s.routes.length, before + 1);
+  assert.ok(ac.schedule.length === 1);
+  // Auto-assign the idle ones in one go.
+  quickLease(s, 'a320n');
+  quickLease(s, 'a320n');
+  const res = G.autoAssignIdle(s);
+  assert.ok(res.ok, res.error);
+  assert.equal(s.fleet.filter((a) => !a.schedule.length).length, 0);
+});
+
+test('the aircraft finder suggests own aircraft and types to acquire for a route', () => {
+  const s = setup();
+  manual(s);
+  const { route } = G.openRoute(s, 'DEN', 'DUB');
+  const small = quickLease(s, 'e175');
+  const big = quickLease(s, 'b789');
+  const { own, acquire } = G.aircraftForRoute(s, route);
+  assert.ok(own.some((x) => x.acId === big.id));
+  assert.ok(!own.some((x) => x.acId === small.id), 'E175 lacks the range');
+  assert.ok(acquire.length > 0);
+  assert.ok(acquire.every((x) => G.aircraftById[x.type].range >= route.distance));
+  assert.ok(acquire.every((x) => x.lease || x.used || x.order), 'each has a way to get it');
+  // Estimates track the simulation on a flown route.
+  assert.ok(G.setFrequency(s, big.id, route.id, 6).ok);
+  run(s, 4);
+  const l = route.last;
+  const t = G.typeOf(big);
+  const own2 = G.weeklyFromMonthly(big.lease.monthly) * ((6 * G.roundTripHours(t, route.distance)) / G.weeklyHours(t));
+  const est = G.tripEconomics(s, t, route, { freq: 6, demand: l.paxTotal, fare: l.ticket / l.paxTotal, seats: G.seatCount(big.config), ownership: own2 });
+  // Crew pay is allocated across the whole workforce in the sim, so compare the rest.
+  const actualCost = l.directCost + l.ownership;
+  const estCost = est.cost - est.costs.crew;
+  assert.ok(Math.abs(estCost - actualCost) / actualCost < 0.25, `${estCost} vs ${actualCost}`);
+  assert.ok(est.costs.crew > 0);
+});
+
+test('autopilot assigns aircraft at slot-controlled hubs by buying affordable slots', () => {
+  const s = setup({ hub: 'ORD' });
+  for (const to of ['BOS', 'DEN', 'ATL', 'LAX', 'MIA', 'SEA', 'MSP', 'PHL']) G.openRoute(s, 'ORD', to);
+  for (let i = 0; i < 10; i++) quickLease(s, i % 2 ? 'a320n' : 'b38m');
+  run(s, 3);
+  const idle = s.fleet.filter((a) => !a.schedule.length);
+  assert.equal(idle.length, 0, `${idle.length} idle`);
+  const info = G.slotInfo(s, 'ORD');
+  assert.ok(info.used <= info.held);
+});
+
+test('head office scales with the operation', () => {
+  const s = setup();
+  const start = G.staffRequirements(s).admin;
+  assert.ok(start < 25, `startup head office ${start}`);
+  for (const to of ['SEA', 'LAX', 'ORD', 'PHX', 'SLC', 'BOS']) G.openRoute(s, 'DEN', to);
+  for (const r of s.routes) G.setFrequency(s, quickLease(s, 'a320n').id, r.id, 14);
+  const req = G.staffRequirements(s);
+  const operational = req.pilots + req.cabin + req.engineers + req.ground;
+  assert.ok(req.admin > start);
+  assert.ok(req.admin / (operational + req.admin) < 0.12, `head office share ${req.admin}/${operational}`);
+});
+
+test('a uniform fleet is cheaper to crew, maintain and run', () => {
+  const uniform = setup();
+  const mixed = setup();
+  manual(uniform);
+  manual(mixed);
+  for (const s of [uniform, mixed]) for (const to of ['SEA', 'LAX', 'ORD', 'PHX', 'SLC', 'BOS']) G.openRoute(s, 'DEN', to);
+  const types = ['a320n', 'b38m', 'e175', 'a221', 'crj9', 'b789'];
+  uniform.routes.forEach((r) => G.setFrequency(uniform, quickLease(uniform, 'a320n').id, r.id, 10));
+  mixed.routes.forEach((r, i) => G.setFrequency(mixed, quickLease(mixed, types[i]).id, r.id, 10));
+  const cu = G.commonality(uniform);
+  const cm = G.commonality(mixed);
+  assert.equal(cu.families, 1);
+  assert.equal(cm.families, 6);
+  assert.equal(cu.overhead, 0);
+  assert.ok(cm.overhead > 0 && cm.pilotFactor > cu.pilotFactor);
+  assert.equal(G.familyOf('b38m'), G.familyOf('b738'));
+  assert.notEqual(G.familyOf('a320n'), G.familyOf('b38m'));
+  // Deep sub-fleets get cheaper maintenance; orphans pay more.
+  assert.ok(G.familyMxFactor(12) < 1 && G.familyMxFactor(1) > 1);
+  run(uniform, 2);
+  run(mixed, 2);
+  assert.ok(mixed.lastReport.cost.overhead - uniform.lastReport.cost.overhead > cm.overhead * 0.8);
+});
+
+test('incidents are occasional, not routine', () => {
+  const s = setup({ startYear: 1975 });
+  const ac = G.makeAircraft(s, 'b727', { owned: true, ageWeeks: 200 });
+  const r = G.incidentRates(s, ac);
+  // A 727 flying 30 sectors a week: well under one reportable incident a year.
+  assert.ok(r.minor * 30 * 52 < 0.25, `minor/yr ${r.minor * 30 * 52}`);
+  assert.ok(r.serious * 30 * 52 < 0.05);
+});
+
+// ---------------------------------------------------------------------------
+// Cabin presets, fleet-wide refits and standard layouts.
+
+test('cabin presets are valid and respect the exit limit', () => {
+  for (const id of ['a320n', 'b789', 'b744', 'at72', 'b712', 'crj9']) {
+    const t = G.aircraftById[id];
+    if (!t) continue;
+    const presets = G.cabinPresets(t, 2024);
+    assert.ok(presets.length >= 2, `${id} has presets`);
+    for (const p of presets) {
+      assert.ok(G.validateConfig(t, p.config, p.cabin, 2024).ok, `${id} ${p.id}`);
+      assert.ok(G.seatCount(p.config) <= t.maxSeats, `${id} ${p.id} within exit limit`);
+      assert.ok(!p.config.F || p.config.F >= 4, 'no token first cabins');
+    }
+  }
+  const a320 = G.aircraftById.a320n;
+  assert.equal(G.validateConfig(a320, { F: 0, J: 0, W: 0, Y: a320.maxSeats + 1 }, { Y: 'dense' }, 2024).ok, false, 'dense seats still obey the exit limit');
+});
+
+test('fill with economy uses the remaining floor', () => {
+  const t = G.aircraftById.a320n;
+  const cabin = G.defaultCabin(t);
+  const filled = G.fillEconomy(t, { F: 0, J: 12, W: 0, Y: 0, C: 0 }, cabin);
+  assert.equal(filled.J, 12);
+  assert.ok(filled.Y > 100);
+  assert.ok(G.validateConfig(t, filled, cabin, 2024).ok);
+  assert.equal(G.validateConfig(t, { ...filled, Y: filled.Y + 1 }, cabin, 2024).ok, false, 'fill is tight');
+});
+
+test('a whole sub-fleet can be refitted and new orders use the standard layout', () => {
+  const s = setup();
+  const a = quickLease(s, 'a320n');
+  const b = quickLease(s, 'a320n');
+  const t = G.aircraftById.a320n;
+  const p = G.cabinPresets(t, G.yearOf(s.week)).find((x) => x.id === 'economy');
+  s.cash = 1e9;
+  assert.ok(G.retrofitFleetType(s, 'a320n', p.config, p.cabin).ok);
+  for (const ac of [a, b]) assert.ok(ac.downtime?.untilWeek > s.week, 'in the shop');
+  assert.equal(G.retrofitFleetType(s, 'a320n', p.config, p.cabin).ok, false, 'a pending refit is not charged twice');
+  assert.ok(G.setStandardLayout(s, 'a320n', p.config, p.cabin).ok);
+  assert.equal(G.setStandardLayout(s, 'a320n', { ...p.config, Y: 400 }, p.cabin).ok, false);
+  assert.ok(G.orderAircraft(s, 'a320n', 1).ok);
+  const ordered = s.fleet.find((x) => x.type === 'a320n' && x.deliveryWeek > s.week);
+  assert.equal(G.seatCount(ordered?.config ?? s.orders.at(-1).config), G.seatCount(p.config));
 });

@@ -54,7 +54,7 @@ export function routePreview(s, a, b) {
       <h3>Competition</h3>
       ${rivals.length ? `<ul class="plain">${rivals.map((r) => `<li>${esc(G.rivalDef(s, r.id).name)} <span class="muted">${G.RIVAL_TYPES[G.rivalDef(s, r.id).type].label}${r.nonstop ? ' · nonstop' : ` · via ${r.via ?? 'hub'}`}</span></li>`).join('')}</ul>` : '<p class="good">No rival flies this market.</p>'}
       <h3>Your aircraft able to fly it</h3>
-      <p class="small">${able.length ? able.map((x) => x.reg).join(', ') : '<span class="muted">None in the fleet</span>'}</p>
+      <p class="small">${able.length ? Object.entries(able.reduce((m, x) => ((m[x.type] = [...(m[x.type] ?? []), x.reg]), m), {})).map(([t, regs]) => `<b>${esc(typeName(t))}</b> <span class="muted">${G.aircraftById[t].range.toLocaleString()} km</span> — ${regs.join(', ')}`).join('<br>') : `<span class="muted">None in the fleet — this route needs ${int(d)} km of range.</span>`}</p>
       ${slotNotes.length ? `<p class="small warn">${slotNotes.join('<br>')}</p>` : ''}
       <button class="primary" data-action="open-route" data-a="${a}" data-b="${b}" ${!rights.ok || exists ? 'disabled' : ''}>${exists ? 'Already flown' : `Launch route (${money(cost)})`}</button>
     </div>
@@ -106,6 +106,15 @@ function detail(c, route) {
   const planned = G.routeCapacity(s, route);
   const aircraft = G.routeAircraft(s, route);
   const candidates = s.fleet.filter((ac) => !aircraft.includes(ac) && G.canOperate(s, ac, route).ok && G.maxFrequency(s, ac, route) > 0);
+  // Fleet types that can't fly this route at all, and why (range, runway, noise).
+  const unable = Object.values(s.fleet.filter((ac) => !aircraft.includes(ac)).reduce((m, ac) => {
+    const t = G.typeOf(ac);
+    if (m[ac.type] || G.canOperate(s, ac, route).ok) return m;
+    const shortRwy = Math.min(ap(route.a).runway, ap(route.b).runway);
+    const why = t.range < route.distance ? `${t.range.toLocaleString()} km range` : t.runway > shortRwy ? `needs ${t.runway.toLocaleString()} m runway` : 'noise rules';
+    m[ac.type] = { type: ac.type, why };
+    return m;
+  }, {}));
   const classes = G.CLASSES.filter((k) => planned[k] > 0 || (l?.seats?.[k] ?? 0) > 0 || k === 'Y' || k === 'J');
   const rm = { ...G.DEFAULT_RM, ...(route.rm ?? {}) };
   const auto = G.autoPriced(s, route);
@@ -129,9 +138,8 @@ function detail(c, route) {
       { h: 'Demand', cls: 'num', v: (k) => int(l?.demand?.[k] ?? 0) },
       { h: 'Pax', cls: 'num', v: (k) => `${int(l?.pax?.[k] ?? 0)}${l?.adv?.[k] ? `<br><small class="muted">${int(l.adv[k])} adv</small>` : ''}` },
       { h: 'Load', cls: 'num', v: (k) => (l?.seats?.[k] ? pct(l.pax[k] / l.seats[k]) : '–') },
-      { h: 'Base fare', v: (k) => `<input type="number" name="fare_${k}" value="${nominal(route.fares[k])}" min="1" step="5" class="w-90">` },
-      { h: 'Flex / advance', cls: 'num', v: (k) => `${usd(route.fares[k] * G.flexMult(k, rm.spread))} / ${usd(route.fares[k] * G.advMult(k, rm.spread))}` },
-      { h: 'Ref', cls: 'num muted', v: (k) => usd(G.fareNow(s, route.distance, k)) },
+      { h: 'Base fare', v: (k) => `<input type="number" name="fare_${k}" value="${nominal(route.fares[k])}" min="1" step="5" class="w-90" title="Market reference ${usd(G.fareNow(s, route.distance, k))}"><br><small class="muted">ref ${usd(G.fareNow(s, route.distance, k))}</small>` },
+      { h: 'Flex · adv', cls: 'num', v: (k) => `${usd(route.fares[k] * G.flexMult(k, rm.spread))}<br><small class="muted">${usd(route.fares[k] * G.advMult(k, rm.spread))}</small>` },
     ])}
     <div class="row wrap">
       <button class="primary small" data-action="save-fares" data-id="${route.id}">Save fares</button>
@@ -141,33 +149,34 @@ function detail(c, route) {
     <h3>Revenue management</h3>
     <div class="stack" data-form>
       <label class="check"><input type="checkbox" data-change="route-autoprice" data-id="${route.id}" ${auto ? 'checked' : ''} ${s.autopilot?.pricing ? '' : 'disabled'}> Autopilot sets fares and the advance bucket ${s.autopilot?.pricing ? '' : '<small class="muted">(autopilot pricing is off)</small>'}</label>
-      <div class="grid cols-4 tight">
-        <div class="field"><label>Flex–advance spread</label><input type="number" name="spread" value="${Math.round(rm.spread * 100)}" min="0" max="60" step="5" class="w-70"><small class="muted">%</small></div>
-        <div class="field"><label>Advance seats</label><input type="number" name="advShare" value="${Math.round(rm.advShare * 100)}" min="0" max="100" step="5" class="w-70"><small class="muted">% of each cabin</small></div>
-        <div class="field"><label>Peak</label><input type="number" name="peak" value="${Math.round(rm.peak * 100)}" min="100" max="140" step="1" class="w-70"><small class="muted">%</small></div>
-        <div class="field"><label>Off-peak</label><input type="number" name="offpeak" value="${Math.round(rm.offpeak * 100)}" min="60" max="100" step="1" class="w-70"><small class="muted">%</small></div>
+      <div class="inline-fields">
+        <label>Flex–advance spread <span><input type="number" name="spread" value="${Math.round(rm.spread * 100)}" min="0" max="60" step="5" class="w-60">%</span></label>
+        <label>Advance seats <span><input type="number" name="advShare" value="${Math.round(rm.advShare * 100)}" min="0" max="100" step="5" class="w-60">%</span></label>
+        <label>Peak <span><input type="number" name="peak" value="${Math.round(rm.peak * 100)}" min="100" max="140" step="1" class="w-60">%</span></label>
+        <label>Off-peak <span><input type="number" name="offpeak" value="${Math.round(rm.offpeak * 100)}" min="60" max="100" step="1" class="w-60">%</span></label>
+        <button class="small" data-action="save-rm" data-id="${route.id}">Save</button>
       </div>
-      <div class="row"><button class="small" data-action="save-rm" data-id="${route.id}">Save RM settings</button>
-      <small class="muted">Flexible travellers pay the flex fare; price-sensitive ones buy advance fares while the bucket is open (${pct(0.3)} of turned-away ones buy up). Peak/off-peak multipliers apply when seasonal demand is ±4%.</small></div>
+      <small class="muted">Flexible travellers pay the flex fare; price-sensitive ones buy advance fares while the bucket is open (${pct(0.3)} of those turned away buy up). Peak/off-peak multipliers apply when seasonal demand is ±4%.</small>
     </div>`)}
     ${panel('Aircraft & frequencies', `${table(aircraft, [
-      { h: 'Aircraft', v: (ac) => `<a href="#fleet/ac/${ac.id}">${ac.reg}</a><br><small class="muted">${esc(typeName(ac.type))}</small>` },
-      { h: 'Layout', v: (ac) => G.CLASSES.filter((k) => ac.config[k]).map((k) => `${k}${ac.config[k]}`).join(' ') || 'Freighter' },
+      { h: 'Aircraft', v: (ac) => `<a href="#fleet/ac/${ac.id}">${ac.reg}</a> <small class="muted">${G.CLASSES.filter((k) => ac.config[k]).map((k) => `${k}${ac.config[k]}`).join(' ') || 'freighter'}</small><br><small class="muted">${esc(typeName(ac.type))} · ${G.typeOf(ac).range.toLocaleString()} km</small>` },
       { h: 'Round trips/wk', v: (ac) => (seasonal || G.isSeasonal(ac)
         ? ['summer', 'winter'].map((se) => `<div class="row" data-form><small class="w-60">${se === 'summer' ? 'Summer' : 'Winter'}</small><input type="number" name="freq" min="0" max="${G.maxFrequency(s, ac, route, se)}" value="${G.entryFreq(ac, route.id, se)}" class="w-70"><button class="small" data-action="set-freq" data-ac="${ac.id}" data-route="${route.id}" data-season="${se}">Set</button></div>`).join('')
-        : `<div class="row" data-form><input type="number" name="freq" min="0" max="${G.maxFrequency(s, ac, route)}" value="${G.entryFreq(ac, route.id)}" class="w-70"><button class="small" data-action="set-freq" data-ac="${ac.id}" data-route="${route.id}">Set</button><button class="small ghost" data-action="split-season" data-ac="${ac.id}" data-route="${route.id}" title="Plan summer and winter separately">☀/❄</button></div><small class="muted">max ${G.maxFrequency(s, ac, route)}</small>`) },
+        : `<div class="row nowrap" data-form><input type="number" name="freq" min="0" max="${G.maxFrequency(s, ac, route)}" value="${G.entryFreq(ac, route.id)}" class="w-60" title="Up to ${G.maxFrequency(s, ac, route)} a week"><button class="small" data-action="set-freq" data-ac="${ac.id}" data-route="${route.id}">Set</button><button class="small ghost" data-action="split-season" data-ac="${ac.id}" data-route="${route.id}" title="Plan summer and winter separately">☀/❄</button></div><small class="muted">max ${G.maxFrequency(s, ac, route)}</small>`) },
       { h: 'Status', v: (ac) => pill(G.statusOf(s, ac).label, G.statusOf(s, ac).tone) },
       { h: '', v: (ac) => `<button class="small danger" data-action="unassign" data-ac="${ac.id}" data-route="${route.id}">Remove</button>` },
     ], { empty: 'No aircraft assigned.' })}
     <div class="row wrap" data-form>
-      <select name="ac">${options(candidates.map((ac) => [ac.id, `${ac.reg} · ${typeName(ac.type)} · up to ${G.maxFrequency(s, ac, route)}/wk`]), '', { blank: candidates.length ? 'Add aircraft…' : 'No aircraft with spare hours can fly this' })}</select>
+      <select name="ac">${options(candidates.map((ac) => [ac.id, `${ac.reg} · ${typeName(ac.type)} · ${G.typeOf(ac).range.toLocaleString()} km · up to ${G.maxFrequency(s, ac, route)}/wk`]), '', { blank: candidates.length ? 'Add aircraft…' : 'No aircraft with spare hours can fly this' })}</select>
       <input type="number" name="freq" placeholder="max" min="1" class="w-70">
       <select name="season">${options([['all', 'All year'], ['summer', 'Summer only'], ['winter', 'Winter only']], 'all')}</select>
       <button class="primary small" data-action="add-ac" data-route="${route.id}" ${candidates.length ? '' : 'disabled'}>Assign</button>
     </div>
+    <p class="muted small">Needs ${int(route.distance)} km of range and ${int(Math.min(ap(route.a).runway, ap(route.b).runway))} m of runway.${unable.length ? ` Can't fly it: ${unable.map((u) => `${esc(typeName(u.type))} <span class="bad">(${esc(u.why)})</span>`).join(', ')}.` : ''}</p>
     <p class="muted small">Now: ${G.SEASONS[season]} schedule — ${num(G.routeFreq(s, route, 'summer'), 0)} summer / ${num(G.routeFreq(s, route, 'winter'), 0)} winter round trips a week.</p>
     <p class="muted small">Round-trip block ${l?.flights ? num((l.hours / l.flights) * 2, 1) : '–'} h. Frequencies need slots at congested airports — bought automatically when available.</p>`)}
   </div>
+  ${aircraftFinder(s, route)}
   <div class="grid cols-3">
     ${panel('Weekly economics', l ? statement([
       ['Passenger revenue', money(l.ticket)],
@@ -188,9 +197,7 @@ function detail(c, route) {
       ['Route profit', signed(l.profit), 'total'],
     ]) : '<p class="muted">Results appear after the first week of flying.</p>')}
     ${panel('Competition', `${rivals.length ? table(rivals, [
-      { h: 'Airline', v: (r) => `<a href="#competitors/${r.id}">${esc(G.rivalDef(s, r.id).name)}</a>` },
-      { h: 'Type', v: (r) => G.RIVAL_TYPES[G.rivalDef(s, r.id).type].label },
-      { h: 'Service', v: (r) => (r.nonstop ? 'Nonstop' : `Via ${r.via ?? 'hub'}`) },
+      { h: 'Airline', v: (r) => `<a href="#competitors/${r.id}">${esc(G.rivalDef(s, r.id).name)}</a><br><small class="muted">${G.RIVAL_TYPES[G.rivalDef(s, r.id).type].label} · ${r.nonstop ? 'nonstop' : `via ${r.via ?? 'hub'}`}</small>` },
       { h: 'Fares', cls: 'num', v: (r) => pct(G.RIVAL_TYPES[G.rivalDef(s, r.id).type].fare * r.fare) },
       { h: 'Capacity', cls: 'num', v: (r) => pct(r.cap) },
     ]) : '<p class="good">You have this market to yourself.</p>'}`)}
@@ -205,6 +212,33 @@ function detail(c, route) {
 }
 
 // ---------------------------------------------------------------------------
+
+// Which aircraft should fly this route: spare aircraft you already have, and
+// types you could lease, buy used or order, ranked by estimated weekly profit.
+function aircraftFinder(s, route) {
+  const { own, acquire } = G.aircraftForRoute(s, route, { limit: 6 });
+  const est = (x) => `<span class="${x.profit >= 0 ? 'good' : 'bad'}">${money(x.profit)}</span>`;
+  const how = (x) => [
+    x.lease ? `<button class="small" data-action="lease-offer" data-id="${x.lease.id}" title="${money(x.lease.monthly)}/month">Lease · ${x.lease.lead} wk</button>` : '',
+    x.used ? `<button class="small" data-action="buy-used" data-id="${x.used.id}" ${s.cash < x.used.price ? 'disabled' : ''}>Buy used ${money(x.used.price)}</button>` : '',
+    x.order ? `<button class="small" data-action="order-one" data-type="${x.type}" title="20% deposit now">Order · ${Math.round(x.order.lead / 52 * 10) / 10} yr</button>` : '',
+  ].filter(Boolean).join(' ');
+  return `<div class="grid cols-2">
+    ${panel('Your aircraft that could fly it', table(own, [
+      { h: 'Aircraft', v: (x) => `<a href="#fleet/ac/${x.acId}">${x.reg}</a><br><small class="muted">${esc(typeName(x.type))} · ${int(G.aircraftById[x.type].range)} km</small>` },
+      { h: 'Trips/wk', cls: 'num', v: (x) => x.freq },
+      { h: 'Est. load', cls: 'num', v: (x) => pct(x.lf) },
+      { h: 'Est. profit/wk', cls: 'num', v: est },
+      { h: '', cls: 'num', v: (x) => `<button class="small ${x.profit > 0 ? 'primary' : ''}" data-action="fit-assign" data-ac="${x.acId}" data-route="${route.id}" data-a="${route.a}" data-b="${route.b}" data-freq="${x.freq}">Assign</button>` },
+    ], { empty: 'None of your aircraft has the range, runway and spare hours for this route.' }))}
+    ${panel('Aircraft to acquire for it', `${table(acquire, [
+      { h: 'Type', v: (x) => `<b>${esc(typeName(x.type))}</b>${x.newFamily ? ' <small class="pill warn" title="Adds a new aircraft family: extra crews, spares and overhead (included in the estimate)">New family</small>' : ''}<br><small class="muted">${x.seats} seats · ${int(G.aircraftById[x.type].range)} km</small>` },
+      { h: 'Trips/wk', cls: 'num', v: (x) => x.freq },
+      { h: 'Est. profit/wk', cls: 'num', v: est },
+      { h: 'Get it', v: how },
+    ], { empty: 'No type available today can fly this route.' })}<p class="muted small">Profit includes market lease rent. New aircraft join the autopilot's assignments when they arrive.</p>`)}
+  </div>`;
+}
 
 export const actions = {
   'open-route'(el, ctx) {

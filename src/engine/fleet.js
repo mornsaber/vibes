@@ -1,7 +1,7 @@
 // Fleet: acquiring aircraft (factory orders, operating leases, used market),
 // valuation, cabin configuration, retrofits, upgrades and freighter conversions.
 
-import { AIRCRAFT, aircraftById, cabinUnits, seatCount, CLASSES, CHECKS, UPGRADES, CONVERSIONS, inProduction, inService, SEAT_PRODUCTS, seatProducts, defaultCabin, canCombi, cabinGroup } from '../data/aircraft.js';
+import { AIRCRAFT, aircraftById, cabinUnits, seatCount, CLASSES, CHECKS, UPGRADES, CONVERSIONS, inProduction, inService, SEAT_PRODUCTS, seatProducts, defaultCabin, canCombi, cabinGroup, familyOf } from '../data/aircraft.js';
 import { clamp, fail, ok, rand, randInt, pick, weightedPick, newId, log, money, sum, yearOf, weekOfYearStart } from './core.js';
 import { setSchedule } from './network.js';
 
@@ -116,6 +116,11 @@ export function orderAircraft(state, typeId, qty = 1, config, cabin) {
   const year = yearOf(state.week);
   if (!inProduction(type, year)) return fail(year < type.intro ? `${type.name} isn't on offer until ${type.intro - 3}.` : `${type.name} is out of production — look at the lease and used markets.`);
   qty = clamp(Math.round(qty), 1, 50);
+  // Your standard layout for the type, if you've set one.
+  if (!config && state.layouts?.[typeId]) {
+    config = state.layouts[typeId].config;
+    cabin = state.layouts[typeId].cabin;
+  }
   if (config) {
     const v = validateConfig(type, config, cabin, year);
     if (!v.ok) return v;
@@ -309,6 +314,8 @@ export function validateConfig(type, config, cabin, year = 9999) {
   }
   const units = cabinUnits(type, config, cabin);
   if (units > type.maxSeats) return fail(`Layout uses ${units.toFixed(0)} of ${type.maxSeats} available floor units`);
+  // Emergency exits certify a maximum number of passengers, whatever the pitch.
+  if (seatCount(config) > type.maxSeats) return fail(`${type.name} is certified for at most ${type.maxSeats} passengers`);
   return ok({ units });
 }
 
@@ -452,4 +459,126 @@ export function setGroup(state, acId, group) {
   if (!ac) return fail('No such aircraft');
   ac.group = group?.trim() || null;
   return ok();
+}
+
+// ---------------------------------------------------------------------------
+// Fleet commonality: every extra aircraft family needs its own type-rated
+// crews, spares, tooling and training; deep sub-fleets are cheaper to maintain.
+
+export const FAMILY_OVERHEAD = 20e3; // weekly, per family beyond the first
+
+export function fleetFamilies(state) {
+  const fams = new Map();
+  for (const ac of state.fleet) {
+    if (ac.retired) continue;
+    const f = familyOf(ac.type);
+    if (!fams.has(f)) fams.set(f, { family: f, count: 0, types: new Set() });
+    const e = fams.get(f);
+    e.count += 1;
+    e.types.add(ac.type);
+  }
+  return [...fams.values()].sort((a, b) => b.count - a.count);
+}
+
+// Maintenance cost multiplier for an aircraft from the depth of its sub-fleet.
+export const familyMxFactor = (count) => (count >= 12 ? 0.9 : count >= 6 ? 0.95 : count <= 2 ? 1.12 : 1);
+
+export function commonality(state) {
+  const list = fleetFamilies(state);
+  const extra = Math.max(0, list.length - 1);
+  return {
+    families: list.length,
+    list,
+    pilotFactor: 1 + Math.min(0.3, 0.05 * extra),
+    cabinFactor: 1 + Math.min(0.08, 0.015 * extra),
+    engineerFactor: 1 + Math.min(0.25, 0.04 * extra),
+    overhead: extra * FAMILY_OVERHEAD,
+    mx: Object.fromEntries(list.map((f) => [f.family, familyMxFactor(f.count)])),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Cabin layout helpers: presets, filling the floor with economy, applying a
+// layout to a whole sub-fleet, and a standard spec for new orders.
+
+// Best product of a class available in this year from a preference list.
+function prefer(type, cls, year, wanted) {
+  const ok = seatProducts(type, cls, year);
+  return wanted.find((p) => ok.includes(p)) ?? ok[0];
+}
+const unitsOf = (type, cls, product) => cabinUnits(type, { F: 0, J: 0, W: 0, Y: 0, [cls]: 1 }, { [cls]: product });
+
+// Fill the remaining floor with economy seats.
+export function fillEconomy(type, config, cabin) {
+  const rest = { ...config, Y: 0 };
+  const free = type.maxSeats - cabinUnits(type, rest, cabin);
+  const yu = unitsOf(type, 'Y', cabin?.Y ?? defaultCabin(type).Y);
+  const exitLimit = type.maxSeats - seatCount(rest);
+  return { ...rest, Y: Math.max(0, Math.min(exitLimit, Math.floor(free / yu))) };
+}
+
+// Premium seats sized as a share of the floor, the rest economy.
+function layout(type, year, shares, products) {
+  const cabin = { ...defaultCabin(type) };
+  const config = { F: 0, J: 0, W: 0, Y: 0, C: 0 };
+  for (const [cls, share] of Object.entries(shares)) {
+    if (!share) continue;
+    if (cls === 'F' && !['wide', 'jumbo'].includes(type.cat)) continue;
+    cabin[cls] = prefer(type, cls, year, products[cls] ?? []);
+    config[cls] = Math.floor((type.maxSeats * share) / unitsOf(type, cls, cabin[cls]));
+    if (cls === 'F' && config.F < 4) config.F = 0; // a first cabin needs a few seats to be worth it
+  }
+  cabin.Y = prefer(type, 'Y', year, products.Y ?? ['standard']);
+  return { config: fillEconomy(type, config, cabin), cabin };
+}
+
+export function cabinPresets(type, year) {
+  if (type.cat === 'freighter') return [];
+  const wide = ['wide', 'jumbo'].includes(type.cat);
+  const small = type.maxSeats < 60;
+  const list = [
+    { id: 'default', name: 'Factory standard', desc: 'The manufacturer’s typical layout.', ...{ config: { ...type.config, C: 0 }, cabin: defaultCabin(type) } },
+    { id: 'economy', name: 'Max seats', desc: 'All economy up to the exit limit — the most seats per flight.', ...layout(type, year, {}, { Y: ['standard'] }) },
+  ];
+  if (!small) {
+    list.push({ id: 'lcc', name: 'Low-cost', desc: 'Tight-pitch economy to the exit limit plus a few extra-legroom-style rows sold as premium.', ...layout(type, year, { J: wide ? 0 : 0.04 }, { J: ['recliner'], Y: ['dense', 'standard'] }) });
+    list.push({ id: 'two', name: wide ? 'Two-class long-haul' : 'Two-class', desc: wide ? 'Lie-flat business and economy.' : 'Recliner business up front, economy behind.', ...layout(type, year, { J: wide ? 0.22 : 0.08 }, { J: wide ? ['flat', 'angled', 'recliner'] : ['recliner'], Y: ['standard'] }) });
+  }
+  if (wide) {
+    list.push({ id: 'three', name: 'Three-class', desc: 'Business, premium economy and economy.', ...layout(type, year, { J: 0.2, W: 0.12 }, { J: ['flat', 'angled', 'recliner'], W: ['cradle', 'recliner'], Y: ['standard'] }) });
+    list.push({ id: 'premium', name: 'Premium-heavy', desc: 'First, suites in business, extra-legroom economy — for rich long-haul markets.', ...layout(type, year, { F: type.cat === 'jumbo' ? 0.05 : 0.03, J: 0.32, W: 0.12 }, { F: ['suite', 'open'], J: ['suite', 'flat', 'angled'], W: ['cradle', 'recliner'], Y: ['extra', 'standard'] }) });
+  } else if (!small) {
+    list.push({ id: 'premium', name: 'Premium short-haul', desc: 'A big business cabin and extra-legroom economy for business routes.', ...layout(type, year, { J: 0.2 }, { J: ['flat', 'angled', 'recliner'], Y: ['extra', 'standard'] }) });
+  }
+  return list.filter((p) => validateConfig(type, p.config, p.cabin, year).ok);
+}
+
+// Retrofit every aircraft of a type to one layout.
+export function retrofitFleetType(state, typeId, config, cabin) {
+  const type = aircraftById[typeId];
+  const year = yearOf(state.week);
+  config = Object.fromEntries([...CLASSES, 'C'].map((c) => [c, Math.round(Number(config[c]) || 0)]));
+  const v = validateConfig(type, config, cabin, year);
+  if (!v.ok) return v;
+  const same = (ac) => {
+    const pending = ac.downtime?.untilWeek > state.week ? ac.downtime.apply : null; // a refit already in the shop counts
+    const cfg = pending?.config ?? ac.config;
+    const cab = pending?.cabin ?? ac.cabin;
+    return [...CLASSES, 'C'].every((c) => (cfg[c] || 0) === config[c]) && CLASSES.every((c) => !config[c] || (cab?.[c] ?? defaultCabin(type)[c]) === cabin[c]);
+  };
+  const targets = state.fleet.filter((a) => a.type === typeId && !a.retired && !same(a));
+  if (!targets.length) return fail('Every aircraft of this type already has this layout');
+  const total = sum(targets, (a) => retrofitCost(a, config, cabin) * (isDelivered(state, a) ? 1 : 0.5));
+  if (state.cash < total) return fail(`Refitting ${targets.length} aircraft costs ${money(total)}`);
+  for (const a of targets) retrofitCabin(state, a.id, config, cabin);
+  return ok({ message: `${targets.length} ${type.name}${targets.length > 1 ? 's' : ''} scheduled for refit (${money(total)}).` });
+}
+
+// Standard spec for new factory orders of a type.
+export function setStandardLayout(state, typeId, config, cabin) {
+  const type = aircraftById[typeId];
+  const v = validateConfig(type, config, cabin, yearOf(state.week));
+  if (!v.ok) return v;
+  (state.layouts ??= {})[typeId] = { config: { ...config }, cabin: { ...cabin } };
+  return ok({ message: `New ${type.name} orders will be built to this layout.` });
 }

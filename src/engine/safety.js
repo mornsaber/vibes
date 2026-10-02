@@ -23,7 +23,8 @@ export function riskFactors(state, ac) {
   const st = state.staffStatus ?? {};
   const overdue = CHECK_ORDER.some((k) => checkStatus(state, ac, k).overdue);
   const f = {
-    era: eraSafety(year),
+    // Early eras were far less safe, softened so incidents stay occasional events.
+    era: eraSafety(year) ** 0.7,
     reliability: 0.5 + (100 - ac.reliability) / 20,
     maintenance: overdue ? 3 : 1,
     pilots: (1.6 - 0.8 * (st.pilots?.experience ?? 0.6)) * ((st.pilots?.ratio ?? 1) < 0.95 ? 1.3 : 1),
@@ -35,11 +36,12 @@ export function riskFactors(state, ac) {
   return f;
 }
 
-// Hull losses per flight before multipliers (modern baseline ~0.15 per million).
-const HULL_BASE = 0.15e-6;
+// Hull losses per flight before multipliers (modern baseline ~0.1 per million);
+// serious incidents ~10× and reportable minor ones ~60× as common.
+const HULL_BASE = 0.1e-6;
 export const incidentRates = (state, ac) => {
   const r = riskFactors(state, ac).total * HULL_BASE * (state.settings?.safety ?? 1);
-  return { hull: r, serious: r * 25, minor: r * 300 };
+  return { hull: r, serious: r * 10, minor: r * 60 };
 };
 
 export function hijackRate(state) {

@@ -8,28 +8,8 @@ export function render(c) {
   ${({ analyst, opportunities, learn }[tab] ?? analyst)(c)}`;
 }
 
-// Rough weekly passengers you'd capture with daily service at reference fares.
-export function estimateCapture(s, a, b, freq = 7) {
-  const d = G.distanceKm(a, b);
-  const A = ap(a);
-  const B = ap(b);
-  const biz = (A.biz + B.biz) / 2;
-  const rivals = G.rivalsOn(s, a, b);
-  const shares = G.classShares(a, b);
-  const market = G.marketNow(s, a, b);
-  const fe = Math.min(1.5, Math.max(0.35, 0.35 + 0.65 * Math.sqrt(freq / 14)));
-  const ours = (0.5 + s.reputation / 100) * G.serviceAppeal(s, d > 3000) * fe * G.marketingEffect(s);
-  let pax = 0;
-  let revenue = 0;
-  for (const k of ['J', 'Y']) {
-    const theirs = rivals.reduce((t, r) => t + G.rivalAppeal(s, r, k, biz), 0) + (d > 3000 ? 0.25 : 0.1);
-    const share = ours / (ours + theirs + G.OUTSIDE_OPTION[k]);
-    const p = market * (k === 'Y' ? shares.Y + shares.W : shares.J + shares.F) * share * 2;
-    pax += p;
-    revenue += p * G.fareNow(s, d, k);
-  }
-  return { pax, revenue, rivals: rivals.filter((r) => r.nonstop).length, d };
-}
+// Capture estimates live in the engine (fit.js) so the route finder shares them.
+const estimateCapture = (s, a, b, freq) => G.estimateCapture(s, a, b, freq);
 
 function analyst(c) {
   const s = c.state;

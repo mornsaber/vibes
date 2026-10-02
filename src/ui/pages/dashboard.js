@@ -32,12 +32,7 @@ export function issues(s) {
     if (st.required > 0 && st.ratio < 0.95) add(st.ratio < 0.85 ? 'bad' : 'warn', `${G.ROLES[role].name} shortage: ${st.count} of ${st.required} needed.`, '#management/staffing');
     if (s.staff[role].morale < 35) add('warn', `${G.ROLES[role].name} morale is low (${Math.round(s.staff[role].morale)}). Strike risk.`, '#management/staffing');
   }
-  const losers = s.routes.filter((x) => x.last && x.last.freq > 0 && x.last.profit < 0).sort((a, b) => a.last.profit - b.last.profit);
-  if (losers.length) add('warn', `${losers.length} route(s) losing money — worst ${losers[0].a}–${losers[0].b} (${money(losers[0].last.profit)}/wk).`, `#routes/${losers[0].id}`);
-  const empty = s.routes.filter((x) => !G.routeFreq(s, x));
-  if (empty.length) add('warn', `${empty.length} route(s) with no aircraft scheduled.`, '#routes');
-  const full = s.routes.filter((x) => x.last && x.last.lf > 0.96);
-  if (full.length) add('info', `${full.length} route(s) are full — raise fares or add capacity.`, '#network/health');
+  // Route-level fixes (losers, empty or full routes) are in the Advisor panel.
   const ending = s.fleet.filter((a) => !a.owned && a.lease.endWeek - s.week <= 13 && a.lease.endWeek > s.week);
   if (ending.length) add('warn', `${ending.length} lease(s) end within 13 weeks.`, '#finances');
   for (const c of s.contracts.active) if (c.startWeek <= s.week && !s.fleet.some((a) => a.id === c.aircraftId)) add('bad', `Contract with ${c.client} has no aircraft.`, c.category === 'charter' ? '#charter' : '#special');
@@ -72,7 +67,7 @@ export function render({ state: s }) {
   const headcount = G.headcount(s);
 
   return `
-  <div class="page-head"><h1>Dashboard</h1><span class="muted">${esc(s.airline.slogan || (s.scenario ? `Scenario: ${s.scenario.name}` : `${s.airline.homeName}'s newest airline`))}</span></div>
+  <div class="page-head"><h1>Dashboard</h1><span class="muted">${esc(s.airline.slogan || (s.scenario ? `Scenario: ${s.scenario.name}` : `${s.airline.homeName} · founded ${G.yearOf(s.startWeek)} · hub ${s.hubs.map((h) => h.code).join(', ')}`))}</span></div>
   <div class="grid kpis">
     ${kpi('Cash', money(s.cash), { href: '#finances', cls: s.cash < 0 ? 'bad' : '', sub: `Rating ${s.finance.rating}` })}
     ${kpi('Profit / week', money(r?.profit ?? 0), { href: '#finances', cls: (r?.profit ?? 0) < 0 ? 'bad' : 'good', sub: `Revenue ${money(r?.totalRevenue ?? 0)}` })}
@@ -105,15 +100,15 @@ export function render({ state: s }) {
     ${panel('Network', `<div class="mini-stats three">
       <div><label>Hubs</label><b>${s.hubs.length}</b></div><div><label>Routes</label><b>${s.routes.length}</b></div><div><label>Destinations</label><b>${destinations}</b></div>
     </div><a href="#map" class="map-link">${worldMap(s, { view: mapView(s) })}</a>`, { href: '#network' })}
-    ${panel('Upcoming deliveries', upcoming.length ? `<ul class="plain">${upcoming.slice(0, 8).map((u) => `<li><span class="muted mono">${G.dateLabel(u.week)}</span> ${esc(u.text)} <span class="muted">(${u.week - s.week} wk)</span></li>`).join('')}</ul>` : '<p class="muted">Nothing on order. <a href="#fleet/market">Visit the aircraft market</a>.</p>', { href: '#fleet/orders' })}
+    <div class="stack">
+      ${panel('Board objectives', `<ul class="plain">${s.board.objectives.map((o) => {
+        const p = G.objectiveProgress(s, o);
+        return `<li>${p.met ? pill('On track', 'good') : pill('Open', 'warn')} ${esc(o.label)} <span class="muted">— now ${esc(p.value)}</span></li>`;
+      }).join('')}</ul><p class="muted small">Board confidence ${Math.round(s.board.confidence)}/100. Reviews each quarter; objectives judged at year end.</p>`, { href: '#management/airline' })}
+      ${upcoming.length ? panel('Upcoming deliveries', `<ul class="plain">${upcoming.slice(0, 6).map((u) => `<li><span class="muted mono">${G.dateLabel(u.week)}</span> ${esc(u.text)} <span class="muted">(${u.week - s.week} wk)</span></li>`).join('')}</ul>`, { href: '#fleet/orders' }) : ''}
+    </div>
   </div>
-  <div class="grid cols-2">
-    ${panel('Board objectives', `<ul class="plain">${s.board.objectives.map((o) => {
-      const p = G.objectiveProgress(s, o);
-      return `<li>${p.met ? pill('On track', 'good') : pill('Open', 'warn')} ${esc(o.label)} <span class="muted">— now ${esc(p.value)}</span></li>`;
-    }).join('')}</ul><p class="muted small">Board confidence ${Math.round(s.board.confidence)}/100. Reviews each quarter; objectives judged at year end.</p>`, { href: '#management/airline' })}
-    ${panel('News', `<ul class="news">${s.log.slice(0, 10).map((n) => `<li class="${n.tone}"><span class="when">${G.dateLabel(n.week)}</span><span>${esc(n.text)}</span></li>`).join('')}</ul>`)}
-  </div>`;
+  ${panel('News', `<ul class="news">${s.log.slice(0, 8).map((n) => `<li class="${n.tone}"><span class="when">${G.dateLabel(n.week)}</span><span>${esc(n.text)}</span></li>`).join('')}</ul>`)}`;
 }
 
 function scenarioPanel(s) {

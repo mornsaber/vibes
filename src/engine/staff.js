@@ -7,13 +7,13 @@ import { ROLES, ROLE_IDS, SUPERVISOR, MANAGER, ACTIONS, HR_POLICIES } from '../d
 import { REGIONS, airportByCode } from '../data/airports.js';
 import { eraUnion } from '../data/eras.js';
 import { clamp, fail, ok, rand, log, money, sum, monthKey } from './core.js';
-import { typeOf } from './fleet.js';
+import { typeOf, commonality } from './fleet.js';
 import { blockHours, routeById, stations, activeSchedule, seasonOf } from './network.js';
 import { facilityEngineers } from './maintenance.js';
 
-const PILOT_HOURS = 15; // productive block hours per pilot per week
-const CABIN_HOURS = 16;
-const RESERVE = 1.12;
+export const PILOT_HOURS = 15; // productive block hours per pilot per week
+export const CABIN_HOURS = 16;
+export const RESERVE = 1.12;
 const ENGINEERS_PER_AC = { tiny: 1, small: 3, narrow: 4, wide: 7, jumbo: 9 };
 const RECRUIT_COST = { pilots: 30e3, cabin: 5e3, engineers: 12e3, ground: 2e3, admin: 4e3 };
 const FRONTLINE = [0, 1, 2];
@@ -116,13 +116,19 @@ export function staffRequirements(state, horizon = 0) {
   const fleet = state.fleet.filter((a) => a.deliveryWeek <= state.week + horizon && !a.retired);
   const pax = state.lastReport?.pax ?? 0;
   const v = state.ventures;
-  return {
-    pilots: Math.ceil((hours.pilot / PILOT_HOURS) * RESERVE),
-    cabin: Math.ceil((hours.cabin / CABIN_HOURS) * RESERVE),
-    engineers: Math.ceil(sum(fleet, (a) => ENGINEERS_PER_AC[typeOf(a).mx]) + facilityEngineers(state) + (v.mro3p?.level ?? 0) * 60),
+  // Mixed fleets need separately type-rated crews and engineers.
+  const com = commonality(state);
+  const req = {
+    pilots: Math.ceil((hours.pilot / PILOT_HOURS) * RESERVE * com.pilotFactor),
+    cabin: Math.ceil((hours.cabin / CABIN_HOURS) * RESERVE * com.cabinFactor),
+    engineers: Math.ceil(sum(fleet, (a) => ENGINEERS_PER_AC[typeOf(a).mx]) * com.engineerFactor + facilityEngineers(state) + (v.mro3p?.level ?? 0) * 60),
     ground: Math.ceil(state.hubs.length * 50 + (stations(state).length - state.hubs.length) * 6 + pax / 350 + (v.handling?.level ?? 0) * 80),
-    admin: Math.ceil(40 + fleet.length * 2 + state.routes.length * 0.5),
   };
+  // Head office: a small core, plus ~6% of the operational workforce (finance,
+  // HR, IT, planning, sales), with extra for each hub, brand and route.
+  const operational = req.pilots + req.cabin + req.engineers + req.ground;
+  req.admin = Math.ceil(10 + operational * 0.06 + state.hubs.length * 3 + (state.brands?.length ?? 0) * 5 + state.routes.length * 0.25);
+  return req;
 }
 
 // Full staffing plan for one role: frontline split employees/contractors, plus supervision.
