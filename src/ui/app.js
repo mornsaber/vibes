@@ -172,6 +172,7 @@ export function render() {
   app.innerHTML = `
     <div class="shell ${ctx.ui.navOpen ? 'nav-open' : ''}">
       ${renderSidebar(page)}
+      ${ctx.ui.navOpen ? '<div class="nav-scrim" data-action="toggle-nav" aria-hidden="true"></div>' : ''}
       <div class="main-col">
         ${renderTopbar(g)}
         <main id="page">${body}</main>
@@ -441,7 +442,16 @@ function run(handler, el) {
   }
 }
 
+// Touch screens have no hover: a tap on a tooltip label shows it instead of following the link around it.
+const touchOnly = matchMedia('(hover: none)');
 document.addEventListener('click', (e) => {
+  const tip = touchOnly.matches && e.target.closest('.tip');
+  for (const t of document.querySelectorAll('.tip.open')) if (t !== tip) t.classList.remove('open');
+  if (tip) {
+    e.preventDefault();
+    tip.classList.toggle('open');
+    return;
+  }
   const el = e.target.closest('[data-action]');
   if (el && !el.disabled) {
     const handler = ACTIONS[el.dataset.action];

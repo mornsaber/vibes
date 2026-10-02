@@ -308,12 +308,12 @@ table.slots .dot { display: inline-block; width: 12px; height: 12px; border-radi
 
 /* ---- Tooltips & tutorial ---- */
 .tip { border-bottom: 1px dotted currentColor; cursor: help; position: relative; outline: none; }
-.tip:hover::after, .tip:focus::after {
+.tip:hover::after, .tip:focus::after, .tip.open::after {
   content: attr(data-tip); position: absolute; left: 0; top: calc(100% + 6px); z-index: 50; width: max-content; max-width: 260px;
   white-space: normal; text-transform: none; letter-spacing: 0; font-weight: 400; font-size: 12px; line-height: 1.4;
   background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; box-shadow: 0 6px 20px rgba(0,0,0,.25);
 }
-.topbar .tip:hover::after, .topbar .tip:focus::after { left: -40px; }
+.topbar .tip:hover::after, .topbar .tip:focus::after, .topbar .tip.open::after { left: -40px; }
 .tutorial {
   position: fixed; right: 16px; bottom: 16px; z-index: 40; width: 340px; max-width: calc(100vw - 32px);
   background: var(--panel); border: 1px solid var(--accent); border-radius: 12px; padding: 12px 14px; box-shadow: 0 10px 30px rgba(0,0,0,.3);
@@ -362,4 +362,24 @@ td.wrap { white-space: normal; min-width: 180px; }
 @media (max-width: 860px) {
   .topbar { padding-top: calc(8px + env(safe-area-inset-top)); }
   .main-col { padding-left: env(safe-area-inset-left); }
+}
+
+/* ---- Touch screens ---- */
+.nav-scrim { display: none; }
+@media (max-width: 860px) {
+  .nav-scrim { display: block; position: fixed; inset: 0; z-index: 35; background: rgba(3, 7, 15, 0.45); }
+  /* Tooltips open as a sheet along the bottom so they never run off the side. */
+  .tip:hover::after, .tip:focus::after, .tip.open::after, .topbar .tip:hover::after, .topbar .tip:focus::after, .topbar .tip.open::after {
+    position: fixed; left: 16px; right: 16px; top: auto; bottom: calc(16px + env(safe-area-inset-bottom)); width: auto; max-width: none; font-size: 13px; z-index: 70;
+  }
+}
+@media (pointer: coarse) {
+  /* iOS zooms into any field under 16px when it's focused. */
+  input, select, textarea { font-size: 16px; }
+  /* Bigger hit areas without changing the layout much. */
+  button, .button-like { min-height: 36px; }
+  button.small { min-height: 32px; padding: 5px 10px; }
+  td a, .list a, a.small { display: inline-block; padding: 6px 0; }
+  .nav-item { padding: 10px 10px; }
+  .tip { -webkit-tap-highlight-color: transparent; }
 }
