@@ -5,16 +5,18 @@ import { airportByCode, COUNTRIES, REGIONS } from '../data/airports.js';
 import { CLASSES } from '../data/aircraft.js';
 import { ROLE_IDS, ROLES } from '../data/business.js';
 import { MRO_PROVIDERS } from '../data/aircraft.js';
-import { clamp, sum, fail, ok, rand, randNormal, log, money, monthKey, quarterKey, yearOf, weeksInUnit } from './core.js';
+import { eraFuel, eraRate, eraOf } from '../data/eras.js';
+import { clamp, sum, fail, ok, rand, randNormal, log, money, monthKey, quarterKey, yearOf, weeksInUnit, weekOfYearStart, elapsed } from './core.js';
 import { typeOf, isDelivered, makeAircraft, refreshMarkets, removeAircraft, weeklyFromMonthly, aircraftValue } from './fleet.js';
 import { replenishSlots, stations } from './network.js';
 import { maintenanceTick, facilityUpkeep } from './maintenance.js';
-import { staffTick, strikeTick, payroll, headcount } from './staff.js';
+import { staffTick, strikeTick, payroll, headcount, newWorkforce } from './staff.js';
 import { simulateOperations, serviceAppeal, marketingEffect } from './ops.js';
 import { effectiveFuelPrice, serviceDebt, weeklyDepreciation, rateCredit, quarterlyTax, sharePrice, loanRateFor } from './finance.js';
 import { initRivals, rivalsTick, quarterlyRivalReset } from './rivals.js';
 import { generateOffers, reserveContractHours, contractsTick, subsidiesTick, venturesTick } from './contracts.js';
 import { triggerEvent } from './events.js';
+import { buildTimeline, timelineTick, weatherTick, safetyTick } from './safety.js';
 
 export const DIFFICULTY = {
   easy: { label: 'Easy', cash: 200e6, demand: 1.1 },
@@ -22,19 +24,21 @@ export const DIFFICULTY = {
   hard: { label: 'Hard', cash: 70e6, demand: 0.9 },
 };
 
-const zeroCosts = () => ({ checks: 0, recruiting: 0, severance: 0, hedging: 0 });
+const zeroCosts = () => ({ checks: 0, recruiting: 0, severance: 0, hedging: 0, incidents: 0 });
 const zeroCapex = () => ({ aircraft: 0, retrofits: 0, facilities: 0, slots: 0, other: 0 });
 
-export function newGame({ name = 'Skyward Air', code = 'SK', hub = 'ORD', seed, difficulty = 'normal', color = '#4da3ff' } = {}) {
+export function newGame({ name = 'Skyward Air', code = 'SK', hub = 'ORD', seed, difficulty = 'normal', color = '#4da3ff', startYear = 2027 } = {}) {
   const ap = airportByCode[hub];
   if (!ap) throw new Error(`Unknown hub ${hub}`);
   const diff = DIFFICULTY[difficulty] ?? DIFFICULTY.normal;
   const state = {
-    version: 2,
+    version: 3,
     rng: (seed ?? Math.floor(Math.random() * 2 ** 31)) | 0,
     nextId: 1,
     fleetSerial: 1,
-    week: 0,
+    week: weekOfYearStart(startYear),
+    startWeek: weekOfYearStart(startYear),
+    startYear,
     status: 'playing',
     airline: { name, code: code.toUpperCase().slice(0, 2), color, slogan: '', home: ap.country, homeName: COUNTRIES[ap.country], difficulty },
     cash: diff.cash,
@@ -44,19 +48,22 @@ export function newGame({ name = 'Skyward Air', code = 'SK', hub = 'ORD', seed, 
     routes: [],
     market: { leases: [], used: [] },
     slots: {},
-    // Founding team hired before launch: enough crew for the first couple of narrowbodies.
-    staff: Object.fromEntries(ROLE_IDS.map((r) => [r, { count: { pilots: 24, cabin: 60, engineers: 12, ground: 50, admin: 45 }[r], pay: 1, morale: 65, pipeline: [] }])),
+    staff: {},
+    hrPolicy: 'balanced',
     staffAuto: Object.fromEntries(ROLE_IDS.map((r) => [r, true])),
     staffStatus: {},
     strikes: {},
-    service: { catering: 3, comfort: 3, ground: 3, baggage: 3, loyalty: 2 },
+    service: { catering: 3, comfort: 3, ground: 3, baggage: 3, security: 3, loyalty: 2 },
+    incidents: [],
+    timeline: [],
+    brandShock: null,
     marketing: 150e3,
     reputation: 50,
     engineering: { auto: { A: true, B: true, C: true, D: true }, provider: (MRO_PROVIDERS.find((m) => m.region === ap.region) ?? MRO_PROVIDERS[0]).id, preferInHouse: true },
     loans: [],
     hedges: [],
     finance: { rating: 'BB', score: 45, lossCarry: 0, shares: 20e6, dividends: 0, facilityValue: 0 },
-    macro: { fuel: 0.85, economy: 1, baseRate: 0.04, shocks: [] },
+    macro: { fuel: eraFuel(startYear), economy: 1, baseRate: eraRate(startYear), shocks: [] },
     disruptions: [],
     typeRestrictions: {},
     rivals: {},
@@ -65,7 +72,7 @@ export function newGame({ name = 'Skyward Air', code = 'SK', hub = 'ORD', seed, 
     contracts: { offers: [], active: [] },
     subsidies: { offers: [], active: [] },
     ventures: {},
-    board: { confidence: 60, lastPrice: 0, reviews: 0, objectives: [], year: yearOf(0) },
+    board: { confidence: 60, lastPrice: 0, reviews: 0, objectives: [], year: startYear },
     stats: { pax: 0, flights: 0, rpk: 0, ask: 0, revenue: 0, cargoKg: 0, profit: 0 },
     history: [],
     months: {},
@@ -78,13 +85,16 @@ export function newGame({ name = 'Skyward Air', code = 'SK', hub = 'ORD', seed, 
     lowCashWeeks: 0,
     advanceRemaining: 0,
   };
+  // Founding team hired before launch: enough crew for the first couple of narrowbodies.
+  for (const r of ROLE_IDS) state.staff[r] = newWorkforce(state, r, { pilots: 24, cabin: 60, engineers: 12, ground: 50, admin: 45 }[r]);
   if (ap.slots) state.slots[hub] = { held: ap.slots === 2 ? 42 : 70, pool: ap.slots === 2 ? 6 : 60 };
   initRivals(state);
+  buildTimeline(state);
   refreshMarkets(state, true);
   generateOffers(state);
   setObjectives(state);
   state.board.lastPrice = sharePrice(state);
-  log(state, `${name} is founded with ${ap.city} (${hub}) as its hub. The board has set your first-year objectives.`, 'good');
+  log(state, `${name} is founded in ${startYear} — the ${eraOf(startYear).name.toLowerCase()} — with ${ap.city} (${hub}) as its hub. The board has set your first-year objectives.`, 'good');
   return state;
 }
 
@@ -152,7 +162,7 @@ function boardReview(state) {
 // The weekly turn
 
 function demandMacro(state) {
-  const shocks = state.macro.shocks.reduce((m, s) => m * s.mult, 1);
+  const shocks = state.macro.shocks.filter((s) => !s.regions).reduce((m, s) => m * s.mult, 1);
   return state.macro.economy * shocks * (DIFFICULTY[state.airline.difficulty]?.demand ?? 1);
 }
 
@@ -193,7 +203,7 @@ function processDeliveries(state) {
 
 function updateMacro(state) {
   const m = state.macro;
-  m.fuel = clamp(m.fuel + (0.85 - m.fuel) * 0.03 + randNormal(state) * 0.022, 0.4, 2.2);
+  m.fuel = clamp(m.fuel + (eraFuel(yearOf(state.week)) - m.fuel) * 0.03 + randNormal(state) * 0.022, 0.2, 2.5);
   m.economy = clamp(m.economy + (1 - m.economy) * 0.04 + randNormal(state) * 0.008, 0.8, 1.2);
 }
 
@@ -206,6 +216,8 @@ export function advanceWeek(state) {
   state.week += 1;
 
   updateMacro(state);
+  timelineTick(state);
+  weatherTick(state);
   processDeliveries(state);
   reserveContractHours(state);
   staffTick(state);
@@ -215,6 +227,7 @@ export function advanceWeek(state) {
   const contracts = contractsTick(state);
   const subsidies = subsidiesTick(state);
   const ventures = venturesTick(state);
+  const safety = safetyTick(state);
   maintenanceTick(state);
   strikeTick(state);
 
@@ -253,6 +266,7 @@ export function advanceWeek(state) {
     marketing: state.marketing,
     facilities: facilityUpkeep(state) + hubCosts,
     overhead: 120e3 + delivered.length * 8e3 + (fleetValue * 0.0015) / 52 + state.weekCosts.recruiting + state.weekCosts.severance + state.weekCosts.hedging,
+    incidents: state.weekCosts.incidents ?? 0,
     sga: 0.04 * (routeSumRevenue(legList) + contracts.revenue),
     contracts: contracts.cost + ventures.cost,
     interest: debt.interest,
@@ -274,7 +288,7 @@ export function advanceWeek(state) {
   }
 
   // Already-paid items (checks, recruiting, hedges) left cash when they happened.
-  const prepaid = state.weekCosts.checks + state.weekCosts.recruiting + state.weekCosts.severance + state.weekCosts.hedging;
+  const prepaid = state.weekCosts.checks + state.weekCosts.recruiting + state.weekCosts.severance + state.weekCosts.hedging + (state.weekCosts.incidents ?? 0);
   state.cash += totalRevenue - (totalCost - cost.depreciation - prepaid) - debt.principal;
 
   // ---- Route-level profit (allocate crew pay by crew hours, ownership by aircraft hours)
@@ -338,6 +352,7 @@ export function advanceWeek(state) {
     principal: debt.principal,
     connecting: routeSum((s) => s.connecting),
     flows: flows.length,
+    incidents: safety,
     topFlows: flows
       .map((f) => ({ a: f.a, b: f.b, via: f.via, pax: CLASSES.reduce((t, c) => t + (f.carried?.[c] ?? 0) * 2, 0), demand: CLASSES.reduce((t, c) => t + (f.demand?.[c] ?? 0) * 2, 0), revenue: CLASSES.reduce((t, c) => t + (f.carried?.[c] ?? 0) * 2 * (f.fare?.[c] ?? 0), 0), cargoKg: (f.carried?.C ?? 0) * 2 }))
       .filter((f) => f.pax > 0.5 || f.cargoKg > 1)
@@ -368,6 +383,7 @@ export function advanceWeek(state) {
   for (const d of state.disruptions) d.weeks -= 1;
   state.disruptions = state.disruptions.filter((d) => d.weeks > 0);
   for (const [t, r] of Object.entries(state.typeRestrictions)) if (--r.weeks <= 0) delete state.typeRestrictions[t];
+  if (state.brandShock && --state.brandShock.weeks <= 0) state.brandShock = null;
   for (const h of state.hedges) h.weeksLeft -= 1;
   state.hedges = state.hedges.filter((h) => h.weeksLeft > 0);
 
@@ -378,7 +394,7 @@ export function advanceWeek(state) {
     replenishSlots(state);
     generateOffers(state);
     rateCredit(state);
-    state.macro.baseRate = clamp(state.macro.baseRate + randNormal(state) * 0.0015, 0.01, 0.08);
+    state.macro.baseRate = clamp(state.macro.baseRate + (eraRate(yearOf(state.week)) - state.macro.baseRate) * 0.08 + randNormal(state) * 0.0015, 0.005, 0.18);
   }
   if (quarterKey(state.week) !== prevQuarter) {
     boardReview(state);
@@ -404,8 +420,8 @@ export function advanceWeek(state) {
 
   // ---- Decisions
   const queued = state.queue.shift();
-  if (queued) triggerEvent(state, queued.event, queued.data);
-  else if (state.week > 3 && rand(state) < 0.1) triggerEvent(state);
+  if (queued) triggerEvent(state, queued.event, queued.data, true);
+  else if (elapsed(state) > 3 && rand(state) < 0.1) triggerEvent(state);
   return ok({ report });
 }
 

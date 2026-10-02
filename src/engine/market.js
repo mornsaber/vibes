@@ -4,7 +4,8 @@
 import { airportByCode, SINGLE_MARKETS } from '../data/airports.js';
 import { classFareMultiplier } from '../data/aircraft.js';
 import { RIVALS, RIVAL_TYPES, rivalById } from '../data/rivals.js';
-import { distanceKm, pairKey, dayOfYear, clamp } from './core.js';
+import { distanceKm, pairKey, dayOfYear, clamp, yearOf } from './core.js';
+import { regionDemand, eraFare } from '../data/eras.js';
 
 // ---------------------------------------------------------------------------
 // Fares
@@ -12,6 +13,8 @@ import { distanceKm, pairKey, dayOfYear, clamp } from './core.js';
 export const refFare = (d) => Math.round(25 + 0.28 * d ** 0.87);
 export const refClassFare = (d, cls) => Math.round(refFare(d) * classFareMultiplier(cls, d));
 export const refCargoRate = (d) => 0.45 + 0.00028 * d; // USD per kg
+// Era-adjusted reference fare for the current game year.
+export const fareNow = (state, d, cls) => Math.round(refClassFare(d, cls) * eraFare(yearOf(state.week)));
 
 export const ELASTICITY = { F: 1.0, J: 1.4, W: 1.9, Y: 2.4, C: 1.8 };
 export const OUTSIDE_OPTION = { F: 0.25, J: 0.25, W: 0.35, Y: 0.4, C: 0.35 };
@@ -44,10 +47,19 @@ export function baseMarket(a, b) {
   const mix = ((A.biz + B.biz) / 2) * 0.6 + ((A.tourism + B.tourism) / 2) * 0.4;
   const region = A.region === B.region ? 1.15 : 0.75;
   const domestic = A.country === B.country ? 1.2 : 1;
-  m = 1100 * Math.sqrt(A.pop * B.pop) * mix * distanceFactor(distanceKm(a, b)) * region * domestic;
+  m = 1180 * Math.sqrt(A.pop * B.pop) * mix * distanceFactor(distanceKm(a, b)) * region * domestic;
   marketCache.set(k, m);
   return m;
 }
+
+// Market size in the current game year (regional growth over the decades).
+export function eraMarketFactor(state, a, b) {
+  const y = yearOf(state.week);
+  // Softened (square root) so earlier eras stay playable while growth still shifts east.
+  return (regionDemand(airportByCode[a].region, y) * regionDemand(airportByCode[b].region, y)) ** 0.25;
+}
+export const marketNow = (state, a, b) => baseMarket(a, b) * eraMarketFactor(state, a, b);
+export const cargoNow = (state, a, b) => cargoMarket(a, b) * eraMarketFactor(state, a, b);
 
 // Share of travellers wanting each cabin.
 export function classShares(a, b) {
@@ -117,9 +129,11 @@ export const FIFTH_FREEDOM_PERMIT = 3e6;
 // ---------------------------------------------------------------------------
 // Where rivals fly (static network derived from their hubs)
 
+export const rivalDef = (state, id) => rivalById[id] ?? state.newRivals?.find((r) => r.id === id);
+
 const nonstopCache = new Map();
 export function rivalFliesNonstop(rival, x, y) {
-  const k = `${rival.id}|${pairKey(x, y)}`;
+  const k = `${rival.id}|${rival.hubs.join(',')}|${pairKey(x, y)}`;
   let v = nonstopCache.get(k);
   if (v !== undefined) return v;
   v = false;
@@ -171,10 +185,21 @@ export function rivalsOn(state, a, b) {
   const adj = state.rivalMarkets[k] || {};
   const out = [];
   for (const s of staticRivals(a, b)) {
-    const rs = state.rivals[s.id];
-    const m = adj[s.id];
-    if (!rs || rs.status !== 'active' || m?.exited) continue;
-    out.push({ ...s, fare: rs.fareIdx * (m?.fare ?? 1), cap: rs.capIdx * (m?.cap ?? 1) });
+    let id = s.id;
+    let rs = state.rivals[id];
+    // A merged airline's network is flown by its new owner.
+    if (rs?.status === 'merged' && rs.mergedInto) {
+      id = rs.mergedInto;
+      rs = state.rivals[id];
+    }
+    const m = adj[id];
+    if (!rs || rs.status !== 'active' || m?.exited || out.some((x) => x.id === id)) continue;
+    out.push({ ...s, id, fare: rs.fareIdx * (m?.fare ?? 1), cap: rs.capIdx * (m?.cap ?? 1) });
+  }
+  for (const r of state.newRivals ?? []) {
+    const rs = state.rivals[r.id];
+    if (rs?.status !== 'active' || adj[r.id]?.exited || !rivalFliesNonstop(r, a, b)) continue;
+    out.push({ id: r.id, nonstop: true, fare: rs.fareIdx * (adj[r.id]?.fare ?? 1), cap: rs.capIdx * (adj[r.id]?.cap ?? 1) * Math.min(1, rs.fleet / 40 + 0.3) });
   }
   for (const [id, m] of Object.entries(adj)) {
     if (!m.entered || out.some((x) => x.id === id) || state.rivals[id]?.status !== 'active') continue;
@@ -185,7 +210,7 @@ export function rivalsOn(state, a, b) {
 
 // How attractive a rival's offer is for one cabin on this pair.
 export function rivalAppeal(state, entry, cls, biz) {
-  const rival = rivalById[entry.id];
+  const rival = rivalDef(state, entry.id);
   const type = RIVAL_TYPES[rival.type];
   if (cls === 'C') {
     const w = rival.type === 'cargo' ? 1.3 : type.premium ? 0.5 : 0.15;

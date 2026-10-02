@@ -34,10 +34,13 @@ export function newId(state, prefix) {
 }
 
 // ---------------------------------------------------------------------------
-// Calendar. Week 0 starts Monday 4 January 2027.
+// Calendar. Weeks are absolute: week 0 starts Monday 4 January 1960.
 
-const START = Date.UTC(2027, 0, 4);
+const START = Date.UTC(1960, 0, 4);
 const DAY = 86400000;
+// First Monday on or after 1 January of a year.
+export const weekOfYearStart = (year) => Math.max(0, Math.ceil((Date.UTC(year, 0, 1) - START) / (7 * DAY)));
+export const elapsed = (state) => state.week - state.startWeek;
 export const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 export const dateOf = (week) => new Date(START + week * 7 * DAY);

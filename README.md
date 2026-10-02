@@ -1,9 +1,10 @@
 # ✈ Airline Executive Simulator
 
-A deep, turn-based airline management sim. Found an airline at one of 150
-real airports, build a fleet with realistic manufacturer lead times, plan a
-hub-and-spoke network, run engineering, crew and finance, and fight 70+ real
-airlines — all while the board judges you every quarter.
+A deep, turn-based airline management sim. Found an airline in any year from
+1960 at one of 150 real airports, build a fleet from 80 aircraft types (DC-3 to
+A350, Concorde included) with realistic production years and lead times, plan a
+hub-and-spoke network, run engineering, crew, safety and finance, and fight
+100+ real and generated airlines — all while the board judges you every quarter.
 
 Runs entirely in the browser: no dependencies, no build step.
 
@@ -27,12 +28,16 @@ Each page is a hash route (`#routes/rt12`, `#fleet/ac/ac3`, `#engineering/schedu
 | **#planning** — hubs, fleet capacity & idle aircraft, crew plan, slots | **#competitors** — 70+ real airlines with finances, hostility and head-to-head routes |
 | **#fleet** — aircraft, groups, on order, acquire (leases, used, factory orders), aircraft detail | **#cargo** — overview, network, freighter fleet & P2F conversions |
 | **#map** — world map with regional zoom, airport explorer | **#charter** — sports teams, tour operators, cruise lines, pilgrimages… |
-| **#engineering** — A/B/C/D check schedule, MRO facilities, outsourcing, upgrades, cabin layouts | **#special** — military airlift, VIP, humanitarian, ACMI, medevac; ventures (pilot academy, third-party MRO, ground handling, simulator centre) |
+| **#engineering** — A/B/C/D check schedule, MRO facilities, outsourcing, upgrades, cabin layouts, safety & incident log | **#special** — military airlift, VIP, humanitarian, ACMI, medevac; ventures (pilot academy, third-party MRO, ground handling, simulator centre) |
 | **#network** — overview, hubs, pax flow (local vs connecting O&D), route health | |
 | **#markets** — market analyst, opportunity scanner, Learn guide | |
 
 ## Simulation layers
 
+- **Eras** — start any year from 1960. Regional demand growth, real fare levels, fuel, interest rates, booking costs and accident rates follow history (in constant 2027 dollars). Aircraft are only orderable while in production; older types live on in lease and used markets. First-generation jets need flight engineers, Chapter 2 jets are banned in NA/EU from 2002, airframes retire at 45 years.
+- **History, loosely** — oil embargoes, deregulation, wars, terror attacks, epidemics, financial crises, volcanic ash and airspace closures follow a randomised timeline: each may or may not happen, with shifted timing and severity. Historic airlines (Pan Am, TWA, Eastern, BOAC, Swissair…) rise and fall around their real dates — or survive in your timeline.
+- **Workforce** — five workforces with five-step career ladders (e.g. Second Officer → First Officer → Captain → Training Captain → Chief Pilot), grade pay, tenure, retirement, promotions/demotions, supervisor and manager spans of control, captain requirements, contractor sourcing, rival poaching, unions with agreements, claims, work-to-rule/sick-outs/strikes and organising drives, and delegation to department heads under an HR policy.
+- **Safety** — per-flight incident risk from reliability, overdue checks, crew experience and staffing, engineering coverage, airframe age/design and era; minor incidents, serious accidents and rare hull losses with investigations, brand damage and regulator action; hijackings tied to era and security spending; seasonal weather closures and hail/hurricane damage; airspace closures with reroutes.
 - **Demand** — gravity model per airport pair (population, business/tourism mix, distance, region, domestic), split into First/Business/Premium Economy/Economy, with hemisphere-aware seasonality and holidays.
 - **Competition** — real airlines fly from their real hubs (nonstop and connecting). Share is decided cabin by cabin by price elasticity, willingness-to-pay ceilings, frequency, reputation, product, punctuality, lounges, marketing and partnerships.
 - **Network flow** — passengers connect over your hubs; seats are allocated leg by leg (nonstops first, connections share the rest); connecting fares are prorated by distance.
@@ -41,16 +46,16 @@ Each page is a hash route (`#routes/rt12`, `#fleet/ac/ac3`, `#engineering/schedu
 - **People** — five workforces sized from scheduled block hours (augmented long-haul crews, premium-cabin attendants), training pipelines, regional pay, morale, attrition, unions and strikes.
 - **Traffic rights & slots** — cabotage, EU single market, fifth-freedom permits; slot-controlled and congested airports with monthly slot pools.
 - **Finance** — fuel price random walk and hedging, credit rating from leverage/liquidity/coverage, rating-dependent borrowing costs, quarterly tax with loss carry-forward, share price, equity raises and dividends.
-- **Rivals** — monthly AI: finances, hostility, fare wars, capacity dumps, entry onto your profitable routes, exits, bankruptcies.
+- **Rivals** — monthly AI: finances, hostility, fare wars, capacity dumps, entry onto your profitable routes, staff poaching with better pay packages, mergers among rivals, bankruptcies, and generated startups. Buy 25% stakes (dividends + codeshare) or acquire domestic rivals outright (hubs, fleet, routes, staff); weak share prices invite hostile bids for you.
 - **Events** — 23 decisions: union claims, oil shocks, recessions, pandemics, volcanic ash, hurricanes, ATC strikes, airworthiness directives, delivery delays, pilot poaching, rival collapses, alliance invitations…
 - **The board** — quarterly reviews and yearly objectives. Zero confidence: fired. Eight weeks of negative cash: administration.
 
 ## Code layout
 
 ```
-src/data/     airports, aircraft & check program, rivals, business data, land outlines
+src/data/     airports, aircraft & check program, rivals, business data, eras, history, land outlines
 src/engine/   core (rng, calendar), market, fleet, network, maintenance, staff,
-              ops (weekly flow simulation), finance, rivals, contracts, events, turn
+              ops (weekly flow simulation), finance, rivals, contracts, safety, events, turn
 src/ui/       app shell & router, map, shared components, pages/*
 scripts/      serve.js, simulate.js (balance), build-land.js (map data)
 test/         engine tests

@@ -11,7 +11,14 @@ export function issues(s) {
   const r = s.lastReport;
   if (s.cash < 0) add('bad', `Cash is negative (${money(s.cash)}). ${8 - s.lowCashWeeks} weeks until administration.`, '#finances');
   else if (r && s.cash < Math.abs(Math.min(0, r.profit)) * 8) add('bad', `Cash runway under 8 weeks at the current burn.`, '#finances');
-  for (const [role, w] of Object.entries(s.strikes)) add('bad', `${G.ROLES[role].name} on strike (${w} week(s) left).`, '#management/staffing');
+  for (const [role, a] of Object.entries(s.strikes)) add('bad', `${G.ROLES[role].name}: ${G.ACTIONS[a.kind].name.toLowerCase()} (${a.weeks} week(s) left).`, `#management/staffing/${role}`);
+  for (const role of G.ROLE_IDS) if (s.staff[role].poach > 0.0008) add('warn', `Rivals are poaching your ${G.ROLES[role].name.toLowerCase()} with better pay.`, `#management/staffing/${role}`);
+  const recent = s.incidents.filter((i) => s.week - i.week < 8 && (i.severity === 'hull loss' || i.severity === 'serious'));
+  for (const i of recent.slice(0, 2)) add('bad', `${i.severity === 'hull loss' ? 'Accident' : 'Serious incident'}: ${i.reg} — ${i.text}.`, '#engineering/safety');
+  const retired = s.fleet.filter((a) => a.retired);
+  if (retired.length) add('warn', `${retired.length} aircraft past their airframe life limit — sell or return them.`, '#fleet');
+  const banned = s.fleet.filter((a) => a.schedule.some((x) => { const r = G.routeById(s, x.routeId); return r && G.noiseBanned(s, G.typeOf(a), r); }));
+  if (banned.length) add('bad', `${banned.length} aircraft scheduled on routes where Chapter 2 noise rules ban them.`, '#planning/capacity');
   const grounded = s.fleet.filter((a) => a.grounded);
   if (grounded.length) add('bad', `${grounded.length} aircraft grounded: ${grounded.map((a) => a.reg).join(', ')}.`, '#engineering/schedule');
   const overdue = s.fleet.filter((a) => G.isDelivered(s, a) && !a.grounded && G.CHECK_ORDER.some((k) => G.checkStatus(s, a, k).overdue));

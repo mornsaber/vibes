@@ -1,8 +1,8 @@
 // Fleet: acquiring aircraft (factory orders, operating leases, used market),
 // valuation, cabin configuration, retrofits, upgrades and freighter conversions.
 
-import { AIRCRAFT, aircraftById, cabinUnits, seatCount, CLASSES, CHECKS, UPGRADES, CONVERSIONS } from '../data/aircraft.js';
-import { clamp, fail, ok, rand, randInt, pick, weightedPick, newId, log, money, sum } from './core.js';
+import { AIRCRAFT, aircraftById, cabinUnits, seatCount, CLASSES, CHECKS, UPGRADES, CONVERSIONS, inProduction, inService } from '../data/aircraft.js';
+import { clamp, fail, ok, rand, randInt, pick, weightedPick, newId, log, money, sum, yearOf, weekOfYearStart } from './core.js';
 
 export const typeOf = (ac) => aircraftById[ac.type];
 export const ageYears = (state, ac) => Math.max(0, (state.week - ac.builtWeek) / 52);
@@ -82,7 +82,13 @@ export function makeAircraft(state, typeId, { owned = true, lease = null, ageWee
 // ---------------------------------------------------------------------------
 // Valuation & lease pricing
 
-const MARKET_APPETITE = { a388: 0.45, b748: 0.6, crj9: 0.8, b77w: 0.85 };
+const MARKET_APPETITE = { a388: 0.45, b748: 0.6, crj9: 0.8, b77w: 0.85, concorde: 0.5, b741: 0.6, l1011: 0.7 };
+// Out-of-production types lose value as operators and spares dry up.
+function appetite(state, type) {
+  const year = yearOf(state.week);
+  const orphan = type.out != null && year > type.out + 8 ? Math.max(0.35, 1 - (year - type.out - 8) * 0.04) : 1;
+  return (MARKET_APPETITE[type.id] ?? 1) * orphan;
+}
 
 export function aircraftValue(state, ac) {
   const type = typeOf(ac);
@@ -90,11 +96,11 @@ export function aircraftValue(state, ac) {
   const sinceD = (state.week - ac.checks.D.week) / CHECKS.D.weeks;
   const greenTime = 1 - 0.15 * clamp(sinceD, 0, 1);
   const upgrades = 1 + 0.02 * ac.upgrades.length;
-  return type.price * Math.max(0.08, 0.94 ** age) * greenTime * upgrades * (MARKET_APPETITE[type.id] ?? 1) * (0.85 + 0.15 * state.macro.economy);
+  return type.price * Math.max(0.08, 0.94 ** age) * greenTime * upgrades * appetite(state, type) * (0.85 + 0.15 * state.macro.economy);
 }
 
 export function monthlyLeaseRate(state, type, age) {
-  return type.price * 0.0075 * Math.max(0.35, 0.94 ** age) * (MARKET_APPETITE[type.id] ?? 1) * (0.8 + 0.2 * state.macro.economy);
+  return type.price * 0.0075 * Math.max(0.35, 0.94 ** age) * appetite(state, type) * (0.8 + 0.2 * state.macro.economy);
 }
 export const weeklyFromMonthly = (m) => (m * 12) / 52;
 
@@ -104,7 +110,8 @@ export const weeklyFromMonthly = (m) => (m * 12) / 52;
 export function orderAircraft(state, typeId, qty = 1, config) {
   const type = aircraftById[typeId];
   if (!type) return fail('Unknown aircraft type');
-  if (!type.lead) return fail(`${type.name} is out of production — look at the lease and used markets.`);
+  const year = yearOf(state.week);
+  if (!inProduction(type, year)) return fail(year < type.intro ? `${type.name} isn't on offer until ${type.intro - 3}.` : `${type.name} is out of production — look at the lease and used markets.`);
   qty = clamp(Math.round(qty), 1, 50);
   if (config) {
     const v = validateConfig(type, config);
@@ -117,7 +124,7 @@ export function orderAircraft(state, typeId, qty = 1, config) {
   state.cash -= deposit;
   state.ledgerCapex.aircraft += deposit;
   const backlog = state.orders.filter((o) => o.type === typeId).length;
-  const first = state.week + type.lead + randInt(state, 0, 8);
+  const first = Math.max(state.week + type.lead + randInt(state, 0, 8), weekOfYearStart(type.intro) + randInt(state, 0, 12));
   for (let i = 0; i < qty; i++) {
     state.orders.push({
       id: newId(state, 'po'),
@@ -146,17 +153,20 @@ export function cancelOrder(state, orderId) {
 
 const LESSORS = ['AerCap', 'SMBC Aviation Capital', 'Air Lease Corp', 'Avolon', 'BOC Aviation', 'Carlyle Aviation', 'Aviation Capital Group', 'CDB Aviation', 'Aircastle', 'Jackson Square'];
 const SELLERS = ['Liquidator (bankrupt carrier)', 'Fleet renewal sale', 'Lessor remarketing', 'Government disposal', 'Private owner', 'Charter operator'];
-const POPULARITY = { a320n: 6, b38m: 5, a321n: 5, a223: 3, e175: 3, e195e2: 2, atr72: 3, q400: 2, crj9: 2, a221: 1, a319n: 1, a321xlr: 1.5, b3xm: 1, b789: 3, b788: 2, b78x: 1.5, a359: 3, a35k: 1.5, a339: 2, b77w: 3, b779: 0.5, a388: 1, b748: 0.5, b763f: 1.5, b77f: 1.5, b738f: 2, a332f: 1, atr72f: 1, a321f: 1, b77wsf: 1, b748f: 0.7, a350f: 0.3 };
+const POPULARITY = { dc3: 3, dc6: 3, l1049: 2, dc7c: 2, vc8: 2, l188: 1, f27: 2, comet4: 0.7, caravelle: 2, b707: 4, dc8: 2, b727: 5, dc9: 4, bac111: 2, b732: 4, b741: 2, b742: 3, dc10: 3, l1011: 1.5, concorde: 0.03, a300: 1.5, a306: 1.5, b752: 3, b763: 3, md80: 4, b733: 4, b738: 5, a320c: 5, a321c: 3, f100: 1.5, erj145: 2, crj2: 2, md11: 1.5, b744: 3, a343: 2, a346: 1, b772: 3, a333: 3, saab340: 1.5, atr725: 2, a320n: 6, b38m: 5, a321n: 5, a223: 3, e175: 3, e195e2: 2, atr72: 3, q400: 2, crj9: 2, a221: 1, a319n: 1, a321xlr: 1.5, b3xm: 1, b789: 3, b788: 2, b78x: 1.5, a359: 3, a35k: 1.5, a339: 2, b77w: 3, b779: 0.5, a388: 1, b748: 0.5, b763f: 1.5, b77f: 1.5, b738f: 2, a332f: 1, atr72f: 1, a321f: 1, b77wsf: 1, b748f: 0.7, a350f: 0.3 };
 
 export function refreshMarkets(state, initial = false) {
   state.market.leases = state.market.leases.filter((o) => o.expiresWeek > state.week);
   state.market.used = state.market.used.filter((o) => o.expiresWeek > state.week);
-  const types = AIRCRAFT;
+  const year = yearOf(state.week);
+  const types = AIRCRAFT.filter((t) => inService(t, year));
   const n = initial ? 14 : randInt(state, 3, 6);
   for (let i = 0; i < n; i++) {
     const type = weightedPick(state, types, (t) => POPULARITY[t.id] ?? 1);
-    const fresh = type.lead && rand(state) < 0.35;
-    const age = fresh ? 0 : randInt(state, 2, 16);
+    const maxAge = year - type.intro;
+    const fresh = (inProduction(type, year) && year >= type.intro && rand(state) < 0.35) || maxAge < 2;
+    if (fresh && !inProduction(type, year)) continue;
+    const age = fresh ? 0 : randInt(state, Math.min(2, maxAge), Math.min(16, maxAge));
     const quick = initial && i < 5;
     const lead = quick ? randInt(state, 3, 8) : fresh ? randInt(state, 26, 78) : randInt(state, 8, 26);
     const monthly = monthlyLeaseRate(state, type, age) * (quick ? 1.15 : 0.95 + rand(state) * 0.15);
@@ -172,9 +182,10 @@ export function refreshMarkets(state, initial = false) {
     });
   }
   const m = initial ? 10 : randInt(state, 2, 5);
-  for (let i = 0; i < m; i++) {
-    const type = weightedPick(state, types, (t) => POPULARITY[t.id] ?? 1);
-    const age = randInt(state, 4, 24);
+  const usable = types.filter((t) => year - t.intro >= 3);
+  for (let i = 0; i < m && usable.length; i++) {
+    const type = weightedPick(state, usable, (t) => POPULARITY[t.id] ?? 1);
+    const age = randInt(state, Math.min(3, year - type.intro), Math.min(24, year - type.intro));
     const probe = { type: type.id, builtWeek: state.week - age * 52, checks: { D: { week: state.week - randInt(state, 0, 300) } }, upgrades: [] };
     const value = aircraftValue(state, probe);
     state.market.used.push({
@@ -351,6 +362,7 @@ export function startUpgrade(state, acId, upgradeId) {
   if (ac.upgrades.includes(upgradeId)) return fail('Already installed');
   if (type.cat === 'freighter' && (up.quality || up.ancillary)) return fail('Not applicable to freighters');
   if (up.longHaulOnly && !['wide', 'jumbo'].includes(type.cat)) return fail('Seatback IFE is only offered on widebodies');
+  if (up.minYear && yearOf(state.week) < up.minYear) return fail(`${up.name} isn't available until ${up.minYear}`);
   const cost = up.cost[type.mx];
   if (state.cash < cost) return fail(`${up.name} costs ${money(cost)}`);
   state.cash -= cost;

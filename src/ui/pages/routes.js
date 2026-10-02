@@ -32,7 +32,7 @@ export function routePreview(s, a, b) {
   const d = G.distanceKm(a, b);
   const rights = G.trafficRights(s, a, b);
   const exists = s.routes.find((r) => G.pairKey(r.a, r.b) === G.pairKey(a, b));
-  const market = G.baseMarket(a, b) * 2;
+  const market = G.marketNow(s, a, b) * 2;
   const shares = G.classShares(a, b);
   const rivals = G.rivalsOn(s, a, b);
   const cost = rights.ok ? G.routeOpenCost(s, a, b) : 0;
@@ -42,10 +42,10 @@ export function routePreview(s, a, b) {
     ${statement([
       ['Distance', `${int(d)} km`],
       ['Market (all airlines, both ways)', `~${int(market)} pax/wk`],
-      ['Cargo market', `~${int(G.cargoMarket(a, b) * 2)} t/wk`],
+      ['Cargo market', `~${int(G.cargoNow(s, a, b) * 2)} t/wk`],
       ['Cabin demand', `F ${pct(shares.F, 1)} · J ${pct(shares.J, 1)} · W ${pct(shares.W)} · Y ${pct(shares.Y)}`],
-      ['Economy reference fare', `$${G.refClassFare(d, 'Y')}`],
-      ['Business reference fare', `$${G.refClassFare(d, 'J')}`],
+      ['Economy reference fare', `$${G.fareNow(s, d, 'Y')}`],
+      ['Business reference fare', `$${G.fareNow(s, d, 'J')}`],
       ['Traffic rights', rights.ok ? (rights.fifth ? '<span class="warn">Fifth freedom permit</span>' : 'Granted') : `<span class="bad">${esc(rights.reason)}</span>`],
       ['Launch cost', rights.ok ? money(cost) : '–'],
     ])}
@@ -89,7 +89,7 @@ function list(c) {
     { h: 'Pax', cls: 'num', v: (r) => int(r.last?.paxTotal ?? 0) },
     { h: 'Load', cls: 'num', v: (r) => (r.last?.seatTotal ? pct(r.last.lf) : '–') },
     { h: 'Share', cls: 'num', v: (r) => (r.last ? pct(r.last.share) : '–') },
-    { h: 'Price', cls: 'num', v: (r) => pct(G.priceIndex(r)) },
+    { h: 'Price', cls: 'num', v: (r) => pct(G.priceIndex(s, r)) },
     { h: 'Revenue', cls: 'num', v: (r) => money(r.last?.totalRevenue ?? 0) },
     { h: 'Profit', cls: 'num', v: (r) => signed(r.last?.profit ?? 0) },
     { h: 'Trend', v: (r) => sparkline((r.hist ?? []).map((h) => h.profit)) },
@@ -124,7 +124,7 @@ function detail(c, route) {
       { h: 'Pax', cls: 'num', v: (k) => int(l?.pax?.[k] ?? 0) },
       { h: 'Load', cls: 'num', v: (k) => (l?.seats?.[k] ? pct(l.pax[k] / l.seats[k]) : '–') },
       { h: 'Fare', v: (k) => `<input type="number" name="fare_${k}" value="${route.fares[k]}" min="1" step="5" class="w-90">` },
-      { h: 'Ref', cls: 'num muted', v: (k) => `$${G.refClassFare(route.distance, k)}` },
+      { h: 'Ref', cls: 'num muted', v: (k) => `$${G.fareNow(s, route.distance, k)}` },
     ])}
     <div class="row wrap">
       <button class="primary small" data-action="save-fares" data-id="${route.id}">Save fares</button>

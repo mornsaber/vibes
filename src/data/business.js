@@ -1,12 +1,65 @@
 // Business data: staff roles, service standards, contracts and their templates.
 
-// Annual market salary in USD before regional adjustment; weeks to hire/train.
+// Workforces. salary = annual market pay of a fully-qualified mid-grade employee
+// (before regional adjustment). Each role has a five-step ladder: three
+// frontline grades, a supervisor grade and a manager grade.
+//   span      frontline staff per supervisor
+//   career    typical career length in years (drives retirement/turnover)
+//   promote   typical years in grade before promotion to the next
+//   contract  cost premium for agency/contract staff instead of employees
 export const ROLES = {
-  pilots: { name: 'Pilots', salary: 185e3, train: 6, union: 'Pilots union', severanceWeeks: 26 },
-  cabin: { name: 'Cabin crew', salary: 52e3, train: 3, union: 'Flight attendants union', severanceWeeks: 8 },
-  engineers: { name: 'Engineers', salary: 95e3, train: 4, union: 'Engineers union', severanceWeeks: 12 },
-  ground: { name: 'Ground staff', salary: 42e3, train: 1, union: null, severanceWeeks: 4 },
-  admin: { name: 'Head office', salary: 78e3, train: 1, union: null, severanceWeeks: 8 },
+  pilots: {
+    name: 'Pilots', salary: 185e3, train: 6, union: 'Pilots union', severanceWeeks: 26, span: 20, career: 30, contract: 1.35,
+    contractor: 'crew leasing agency', promote: [2, 6, 5, 6],
+    grades: [
+      { title: 'Second Officer', pay: 0.5 }, { title: 'First Officer', pay: 0.8 }, { title: 'Captain', pay: 1.3 },
+      { title: 'Training Captain', pay: 1.5 }, { title: 'Chief Pilot', pay: 1.9 },
+    ],
+  },
+  cabin: {
+    name: 'Cabin crew', salary: 52e3, train: 3, union: 'Flight attendants union', severanceWeeks: 8, span: 25, career: 12, contract: 1.25,
+    contractor: 'cabin crew agency', promote: [2, 4, 4, 5],
+    grades: [
+      { title: 'Flight Attendant', pay: 0.85 }, { title: 'Senior Flight Attendant', pay: 1.0 }, { title: 'Purser', pay: 1.2 },
+      { title: 'Cabin Supervisor', pay: 1.4 }, { title: 'Cabin Services Manager', pay: 2.0 },
+    ],
+  },
+  engineers: {
+    name: 'Engineers', salary: 95e3, train: 4, union: 'Engineers union', severanceWeeks: 12, span: 15, career: 25, contract: 1.3,
+    contractor: 'MRO labour contractor', promote: [3, 5, 5, 6],
+    grades: [
+      { title: 'Mechanic', pay: 0.75 }, { title: 'Licensed Engineer', pay: 1.0 }, { title: 'Senior Licensed Engineer', pay: 1.2 },
+      { title: 'Shift Supervisor', pay: 1.4 }, { title: 'Maintenance Manager', pay: 1.9 },
+    ],
+  },
+  ground: {
+    name: 'Ground staff', salary: 42e3, train: 1, union: 'Ground workers union', severanceWeeks: 4, span: 20, career: 8, contract: 1.1,
+    contractor: 'ground handling company', promote: [1, 3, 3, 4],
+    grades: [
+      { title: 'Customer Service Agent', pay: 0.9 }, { title: 'Senior Agent', pay: 1.05 }, { title: 'Duty Lead', pay: 1.2 },
+      { title: 'Station Supervisor', pay: 1.4 }, { title: 'Station Manager', pay: 1.8 },
+    ],
+  },
+  admin: {
+    name: 'Head office', salary: 78e3, train: 1, union: 'Staff association', severanceWeeks: 8, span: 10, career: 15, contract: 1.2,
+    contractor: 'business services outsourcer', promote: [2, 4, 5, 6],
+    grades: [
+      { title: 'Officer', pay: 0.8 }, { title: 'Senior Officer', pay: 1.0 }, { title: 'Specialist', pay: 1.25 },
+      { title: 'Team Leader', pay: 1.45 }, { title: 'Head of Department', pay: 2.2 },
+    ],
+  },
+};
+export const SUPERVISOR = 3;
+export const MANAGER = 4;
+export const HR_POLICIES = {
+  conciliatory: { name: 'Conciliatory', desc: 'Managers settle union claims in full. Industrial peace, higher wages.' },
+  balanced: { name: 'Balanced', desc: 'Managers meet unions halfway. Occasional work-to-rule.' },
+  hardline: { name: 'Hard-line', desc: 'Managers resist claims. Low wages, frequent industrial action.' },
+};
+export const ACTIONS = {
+  'work-to-rule': { name: 'Work-to-rule', factor: 0.85 },
+  sickout: { name: 'Sick-out', factor: 0.6 },
+  strike: { name: 'Strike', factor: { pilots: 0.1, cabin: 0.35, engineers: 0.4, ground: 0.55, admin: 0.85 } },
 };
 export const ROLE_IDS = Object.keys(ROLES);
 
@@ -17,6 +70,7 @@ export const SERVICE = {
   comfort: { name: 'Cabin comfort & amenities', cost: [0, 0.5, 1.2, 2.2, 3.5], appeal: [0.94, 0.98, 1.0, 1.03, 1.05], desc: 'Pillows, blankets, amenity kits, cleanliness.' },
   ground: { name: 'Airport experience', cost: [1, 2, 3, 5, 8], appeal: [0.95, 0.98, 1.0, 1.02, 1.04], desc: 'Check-in staffing, priority lanes, transfer desks. Cost per passenger.', perPax: true },
   baggage: { name: 'Baggage policy', cost: [0, 0, 0, 0, 0], appeal: [0.92, 0.96, 1.0, 1.02, 1.04], ancillary: [0.12, 0.08, 0.05, 0.03, 0.015], desc: 'Level 1 charges for everything (big ancillaries, unhappy flyers); level 5 is generous.' },
+  security: { name: 'Security & screening', cost: [0.5, 1.5, 3, 5, 8], appeal: [0.98, 0.99, 1.0, 1.0, 1.01], desc: 'Passenger and baggage screening, cockpit security, intelligence. Deters hijackings.', perPax: true },
   loyalty: { name: 'Frequent flyer program', cost: [0, 0.6, 1.2, 2, 3], appeal: [0.96, 0.99, 1.0, 1.03, 1.06], desc: 'Points, status tiers and partner earning. Builds repeat business.', perPax: true },
 };
 export const SERVICE_IDS = Object.keys(SERVICE);

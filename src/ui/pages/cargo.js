@@ -39,11 +39,11 @@ function overview(c) {
 function network(c) {
   const s = c.state;
   const opps = [];
-  for (const h of s.hubs) for (const x of G.AIRPORTS) if (x.code !== h.code && x.cargo >= 1.2 && G.trafficRights(s, h.code, x.code).ok) opps.push({ a: h.code, b: x.code, t: G.cargoMarket(h.code, x.code) * 2, d: G.distanceKm(h.code, x.code) });
+  for (const h of s.hubs) for (const x of G.AIRPORTS) if (x.code !== h.code && x.cargo >= 1.2 && G.trafficRights(s, h.code, x.code).ok) opps.push({ a: h.code, b: x.code, t: G.cargoNow(s, h.code, x.code) * 2, d: G.distanceKm(h.code, x.code) });
   opps.sort((p, q) => q.t * G.refCargoRate(q.d) - p.t * G.refCargoRate(p.d));
   return `${panel('Cargo on your routes', table(s.routes, [
     { h: 'Route', v: (x) => `<a href="#routes/${x.id}">${x.a}–${x.b}</a>` },
-    { h: 'Market', cls: 'num', v: (x) => tonnes(G.cargoMarket(x.a, x.b) * 2000) },
+    { h: 'Market', cls: 'num', v: (x) => tonnes(G.cargoNow(s, x.a, x.b) * 2000) },
     { h: 'Capacity', cls: 'num', v: (x) => tonnes(x.last?.cargoCap ?? 0) },
     { h: 'Carried', cls: 'num', v: (x) => tonnes(x.last?.cargoKg ?? 0) },
     { h: 'Revenue', cls: 'num', v: (x) => money(x.last?.cargoRev ?? 0) },

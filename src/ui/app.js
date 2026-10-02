@@ -18,7 +18,7 @@ import * as charter from './pages/charter.js';
 import * as special from './pages/special.js';
 import * as start from './pages/start.js';
 
-const SAVE_KEY = 'airline-exec-sim/save-v2';
+const SAVE_KEY = 'airline-exec-sim/save-v3';
 
 export const NAV = [
   { section: 'Operations', items: [
@@ -55,7 +55,7 @@ function loadGame() {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
     const g = raw ? JSON.parse(raw) : null;
-    return g?.version === 2 ? g : null;
+    return g?.version === 3 ? g : null;
   } catch {
     return null;
   }
@@ -155,7 +155,7 @@ function renderTopbar(g) {
   const units = ['week', 'month', 'quarter', 'year'];
   return `<header class="topbar">
     <button class="icon-btn nav-toggle" data-action="toggle-nav" aria-label="Menu">☰</button>
-    <div class="date"><b>${G.dateLabel(g.week)}</b><small>Week ${g.week} · ${G.quarterLabel(G.quarterKey(g.week))}</small></div>
+    <div class="date"><b>${G.dateLabel(g.week)}</b><small>${esc(G.eraOf(G.yearOf(g.week)).name)} · ${G.quarterLabel(G.quarterKey(g.week))}</small></div>
     <div class="stats">
       <a class="stat" href="#finances"><label>Cash</label><b class="${g.cash < 0 ? 'bad' : ''}">${money(g.cash)}</b></a>
       <a class="stat" href="#finances"><label>Profit/wk</label><b class="${(r?.profit ?? 0) < 0 ? 'bad' : 'good'}">${money(r?.profit ?? 0)}</b></a>
@@ -188,8 +188,8 @@ function renderModal(g) {
     const fired = g.status === 'fired';
     return `<div class="modal-backdrop"><div class="modal">
       <h3>${G.dateLabel(g.week)}</h3>
-      <h2>${fired ? 'The board has fired you' : `${esc(g.airline.name)} has collapsed`}</h2>
-      <p>${fired ? 'Shareholders lost patience with your results.' : 'Creditors have forced the airline into administration.'} You lasted ${(g.week / 52).toFixed(1)} years, carried ${int(g.stats.pax)} passengers and earned ${money(g.stats.revenue)} in revenue.</p>
+      <h2>${g.status === 'sold' ? `${esc(g.airline.name)} has been sold` : fired ? 'The board has fired you' : `${esc(g.airline.name)} has collapsed`}</h2>
+      <p>${g.status === 'sold' ? `Shareholders accepted ${money(g.soldFor ?? 0)} for the airline.` : fired ? 'Shareholders lost patience with your results.' : 'Creditors have forced the airline into administration.'} You lasted ${(G.elapsed(g) / 52).toFixed(1)} years, carried ${int(g.stats.pax)} passengers and earned ${money(g.stats.revenue)} in revenue.</p>
       <div class="choices"><button data-action="dismiss-end">Review the wreckage</button><button class="primary" data-action="abandon">Start a new airline</button></div>
     </div></div>`;
   }
@@ -258,7 +258,7 @@ const GLOBAL_CHANGES = {
     if (!file) return;
     try {
       const g = JSON.parse(await file.text());
-      if (g.version !== 2) throw new Error('Not a compatible save file');
+      if (g.version !== 3) throw new Error('Not a compatible save file');
       ctx.game = g;
       ctx.ui = { navOpen: false };
       saveGame();

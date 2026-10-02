@@ -7,20 +7,21 @@ import { airportByCode } from '../data/airports.js';
 import { CLASSES } from '../data/aircraft.js';
 import { SERVICE, SERVICE_IDS } from '../data/business.js';
 import { rivalById } from '../data/rivals.js';
-import { clamp, sum, distanceKm, randNormal, pairKey } from './core.js';
+import { clamp, sum, distanceKm, randNormal, pairKey, yearOf } from './core.js';
+import { eraDistribution } from '../data/eras.js';
 import {
-  baseMarket, classShares, cargoMarket, seasonality, refClassFare, refCargoRate,
-  priceEffect, rivalsOn, rivalAppeal, OUTSIDE_OPTION, sameMarket,
+  marketNow, classShares, cargoNow, seasonality, fareNow, refCargoRate,
+  priceEffect, rivalsOn, rivalAppeal, OUTSIDE_OPTION, sameMarket, rivalDef,
 } from './market.js';
 import { typeOf, isOperational, isFreighter, fuelFactor, productQuality, ageYears } from './fleet.js';
-import { blockHours, roundTripHours, availableHours, scheduledHours, isHub, BANK_QUALITY, utilization } from './network.js';
+import { blockHours, roundTripHours, availableHours, scheduledHours, isHub, BANK_QUALITY, utilization, noiseBanned } from './network.js';
 import { dispatchReliability } from './maintenance.js';
 import { crewFactor, cockpitCrew, cabinCrewPerFlight } from './staff.js';
+import { airspaceFuelMult, tickShockRegions } from './safety.js';
 
 const MX_HR = { small: 350, narrow: 550, wide: 1300, jumbo: 2000 };
 const NAV_KM = { small: 0.35, narrow: 0.7, wide: 1.4, jumbo: 2.0 };
 const LANDING = { small: 600, narrow: 1500, wide: 4500, jumbo: 7000 };
-const DISTRIBUTION = 0.08;
 const ALL = [...CLASSES, 'C'];
 
 // Appeal of the cabin product given service standards (long flights magnify catering/comfort).
@@ -43,8 +44,8 @@ const freqEffect = (f) => clamp(0.35 + 0.65 * Math.sqrt(f / 14), 0.35, 1.5);
 function partnerBoost(state, a, b, long) {
   let boost = 1;
   for (const id of state.partners.codeshares) {
-    const r = rivalById[id];
-    if (r.hubs.includes(a) || r.hubs.includes(b)) boost *= 1.12;
+    const r = rivalDef(state, id);
+    if (r && (r.hubs.includes(a) || r.hubs.includes(b))) boost *= 1.12;
   }
   if (state.partners.alliance && long) boost *= 1.08;
   return boost;
@@ -75,6 +76,7 @@ export function simulateOperations(state, { fuelPrice, macro }) {
   // 1. Flights actually operated.
   for (const ac of state.fleet) {
     ac.lastHours = 0;
+    ac.lastFlights = 0;
     if (!isOperational(state, ac) || !ac.schedule.length) continue;
     const type = typeOf(ac);
     const sched = scheduledHours(state, ac);
@@ -82,7 +84,7 @@ export function simulateOperations(state, { fuelPrice, macro }) {
     const factor = scale * cf * dispatchReliability(ac) * (state.typeRestrictions[ac.type]?.factor ?? 1);
     for (const s of ac.schedule) {
       const leg = legs[s.routeId];
-      if (!leg) continue;
+      if (!leg || noiseBanned(state, type, leg.route)) continue;
       const eff = s.freq * factor * disruption(state, leg.route);
       const d = leg.route.distance;
       const bh = blockHours(type, d);
@@ -94,6 +96,7 @@ export function simulateOperations(state, { fuelPrice, macro }) {
       leg.s.acHours[ac.id] = (leg.s.acHours[ac.id] ?? 0) + eff * roundTripHours(type, d);
       leg.entries.push({ ac, type, eff, bh });
       ac.lastHours += eff * 2 * bh;
+      ac.lastFlights += eff * 2;
       ac.fh += eff * 2 * bh;
       ac.cycles += eff * 2;
     }
@@ -152,11 +155,11 @@ export function simulateOperations(state, { fuelPrice, macro }) {
     const B = airportByCode[f.b];
     const biz = (A.biz + B.biz) / 2;
     const long = f.d > 3000;
-    const season = seasonality(f.a, f.b, state.week) * macro;
+    const season = seasonality(f.a, f.b, state.week) * macro * tickShockRegions(state, f.a, f.b);
     const shares = classShares(f.a, f.b);
     const rivals = rivalsOn(state, f.a, f.b);
     const svc = serviceAppeal(state, long);
-    const boost = partnerBoost(state, f.a, f.b, long);
+    const boost = partnerBoost(state, f.a, f.b, long) * (state.brandShock?.mult ?? 1);
     const freq = Math.min(...f.legs.map((l) => l.s.freq));
     const quality = Math.min(...f.legs.map((l) => l.s.quality));
     const connect = f.via ? 0.5 * f.q : 1;
@@ -174,14 +177,14 @@ export function simulateOperations(state, { fuelPrice, macro }) {
         const idx = sum(f.legs, (l) => l.route.cargoIdx) / f.legs.length;
         f.fare.C = refCargoRate(f.d) * idx;
         ours = priceEffect(idx, 1, 'C') * freqEffect(freq) * rep * connect * (0.85 + 0.15 * quality);
-        market = cargoMarket(f.a, f.b) * 1000 * macro;
+        market = cargoNow(state, f.a, f.b) * 1000 * macro;
       } else {
-        const ref = refClassFare(f.d, c);
-        const idx = sum(f.legs, (l) => l.route.fares[c] / refClassFare(l.route.distance, c)) / f.legs.length;
+        const ref = fareNow(state, f.d, c);
+        const idx = sum(f.legs, (l) => l.route.fares[c] / fareNow(state, l.route.distance, c)) / f.legs.length;
         f.fare[c] = f.via ? ref * idx : f.legs[0].route.fares[c];
         const premium = (c === 'J' || c === 'F') && lounge ? 1.06 : 1;
         ours = priceEffect(f.fare[c], ref, c, biz) * quality * svc * rep * freqEffect(freq) * marketing * boost * connect * premium;
-        market = baseMarket(f.a, f.b) * shares[c] * season;
+        market = marketNow(state, f.a, f.b) * shares[c] * season;
       }
       const theirs = sum(rivals, (r) => rivalAppeal(state, r, c, biz)) + generic;
       const share = ours / (ours + theirs + OUTSIDE_OPTION[c]);
@@ -258,31 +261,34 @@ export function simulateOperations(state, { fuelPrice, macro }) {
     const paxTotal = sum(CLASSES, (k) => s.pax[k]);
     const seatTotal = sum(CLASSES, (k) => s.seats[k]);
     const lf = seatTotal ? paxTotal / seatTotal : 0;
+    const reroute = airspaceFuelMult(state, route);
     for (const { ac, type, eff, bh } of entries) {
       const flights = eff * 2;
       const hours = flights * bh;
       const mx = type.mx;
-      s.cost.fuel += flights * type.burn * route.distance * fuelFactor(state, ac) * fuelPrice * (0.92 + 0.1 * lf);
+      s.cost.fuel += flights * type.burn * route.distance * reroute * fuelFactor(state, ac) * fuelPrice * (0.92 + 0.1 * lf);
       s.cost.maintenance += hours * MX_HR[mx] * (1 + ageYears(state, ac) * 0.03) * lineMx;
       s.cost.navigation += flights * route.distance * NAV_KM[mx];
       s.cost.landing += flights * LANDING[mx] * fee;
-      s.crewHours += hours * (cockpitCrew(bh) + cabinCrewPerFlight(ac.config));
+      const cockpit = cockpitCrew(bh) + (type.fe ? 1 : 0);
+      s.crewHours += hours * (cockpit + cabinCrewPerFlight(ac.config));
       // Crews overnight away from base when a rotation can't return the same day or no hub is involved.
       const overnight = !hubEnds || 2 * bh + 1 > 13;
-      if (overnight) s.cost.crewTravel += eff * (cockpitCrew(bh) + cabinCrewPerFlight(ac.config)) * 220;
+      if (overnight) s.cost.crewTravel += eff * (cockpit + cabinCrewPerFlight(ac.config)) * 220;
       if (ac.upgrades.includes('wifi')) s.ancillary += 0.015 * sum(CLASSES, (k) => s.revenue[k]) * (eff / Math.max(s.freq, 1e-9));
     }
     const bhAvg = s.flights ? s.hours / s.flights : 0;
     const premiumPax = s.pax.J + s.pax.F;
-    s.cost.paxFees = paxTotal * (9 + (intl ? 12 : 0)) * fee;
+    const year = yearOf(state.week);
+    s.cost.paxFees = paxTotal * ((9 + (intl ? 12 : 0)) * fee + (year >= 2002 ? 6 : year >= 1990 ? 2 : 0));
     s.cost.handling = paxTotal * (hubEnds === 2 ? 3 : hubEnds === 1 ? 6 : 9) + s.cargoKg * 0.12;
     s.cost.service = paxTotal * (svcPerHour * bhAvg + svcPerPax) + premiumPax * svcPerHour * bhAvg * 1.5;
     const ticket = sum(CLASSES, (k) => s.revenue[k]);
     s.ancillary += (s.revenue.Y + s.revenue.W) * baggage + paxTotal * 4;
-    s.cost.distribution = ticket * DISTRIBUTION;
+    s.cost.distribution = ticket * eraDistribution(yearOf(state.week));
     const eu = sameMarket('FR', A.country) || sameMarket('FR', B.country) || A.country === 'GB' || B.country === 'GB';
     s.cost.delays = (1 - s.otp) * paxTotal * 14 * (eu ? 3 : 1);
-    if (state.partners.codeshares.some((id) => rivalById[id].hubs.some((h) => h === route.a || h === route.b))) s.cost.codeshare = ticket * 0.03;
+    if (state.partners.codeshares.some((id) => rivalDef(state, id)?.hubs.some((h) => h === route.a || h === route.b))) s.cost.codeshare = ticket * 0.03;
     s.ticket = ticket;
     s.totalRevenue = ticket + s.cargoRev + s.ancillary;
     s.directCost = sum(Object.values(s.cost));

@@ -3,11 +3,11 @@
 
 import { airportByCode } from '../data/airports.js';
 import { CLASSES } from '../data/aircraft.js';
-import { clamp, fail, ok, newId, log, money, distanceKm, sum, randInt } from './core.js';
-import { refClassFare, trafficRights, sameMarket, FIFTH_FREEDOM_PERMIT } from './market.js';
+import { clamp, fail, ok, newId, log, money, distanceKm, sum, randInt, yearOf } from './core.js';
+import { fareNow, trafficRights, sameMarket, FIFTH_FREEDOM_PERMIT } from './market.js';
 import { typeOf, isFreighter, isDelivered } from './fleet.js';
 
-const TURN = { turboprop: 0.4, regional: 0.5, narrow: 0.75, wide: 1.5, jumbo: 2, freighter: 1.5 };
+const TURN = { prop: 0.75, sst: 2, turboprop: 0.4, regional: 0.5, narrow: 0.75, wide: 1.5, jumbo: 2, freighter: 1.5 };
 
 export const blockHours = (type, d) => d / type.speed + 0.5;
 export const roundTripHours = (type, d) => 2 * (blockHours(type, d) + TURN[type.cat]);
@@ -72,7 +72,7 @@ export function openRoute(state, a, b) {
     b,
     distance: d,
     openedWeek: state.week,
-    fares: Object.fromEntries(CLASSES.map((c) => [c, refClassFare(d, c)])),
+    fares: Object.fromEntries(CLASSES.map((c) => [c, fareNow(state, d, c)])),
     cargoIdx: 1,
     fifth: rights.fifth,
     last: null,
@@ -95,7 +95,7 @@ export function closeRoute(state, routeId) {
 export function setFare(state, routeId, cls, fare) {
   const route = routeById(state, routeId);
   if (!route) return fail('No such route');
-  const ref = refClassFare(route.distance, cls);
+  const ref = fareNow(state, route.distance, cls);
   route.fares[cls] = Math.round(clamp(Number(fare) || ref, ref * 0.3, ref * 3));
   return ok({ fare: route.fares[cls] });
 }
@@ -104,7 +104,7 @@ export function setFare(state, routeId, cls, fare) {
 export function setPriceIndex(state, routeId, index) {
   const route = routeById(state, routeId);
   if (!route) return fail('No such route');
-  for (const c of CLASSES) route.fares[c] = Math.round(refClassFare(route.distance, c) * clamp(Number(index), 0.3, 3));
+  for (const c of CLASSES) route.fares[c] = Math.round(fareNow(state, route.distance, c) * clamp(Number(index), 0.3, 3));
   return ok();
 }
 
@@ -115,7 +115,7 @@ export function setCargoRate(state, routeId, idx) {
   return ok();
 }
 
-export const priceIndex = (route) => route.fares.Y / refClassFare(route.distance, 'Y');
+export const priceIndex = (state, route) => route.fares.Y / fareNow(state, route.distance, 'Y');
 
 // ---------------------------------------------------------------------------
 // Slots at constrained airports (weekly round-trip slots)
@@ -171,8 +171,14 @@ export function replenishSlots(state) {
 // ---------------------------------------------------------------------------
 // Scheduling
 
+// Chapter 2 (noisy first-generation) jets were banned in North America and Europe from 2002.
+export function noiseBanned(state, type, route) {
+  return type.noise === 2 && yearOf(state.week) >= 2002 && [route.a, route.b].some((c) => ['NA', 'EU'].includes(airportByCode[c].region));
+}
+
 export function canOperate(state, ac, route) {
   const type = typeOf(ac);
+  if (noiseBanned(state, type, route)) return fail(`${type.name} is banned by Chapter 2 noise rules at ${route.a}/${route.b}`);
   if (type.range < route.distance) return fail(`${type.name} range is ${type.range.toLocaleString()} km; route is ${route.distance.toLocaleString()} km`);
   for (const code of [route.a, route.b]) {
     if (airportByCode[code].runway < type.runway) return fail(`${code}'s runway (${airportByCode[code].runway} m) is too short for the ${type.name}`);

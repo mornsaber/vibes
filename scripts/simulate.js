@@ -16,7 +16,7 @@ function play(label, { hub, routes, types, seed = 11, pricing = true }) {
     for (let i = 0; i < n; i++) {
       const monthly = G.monthlyLeaseRate(s, G.aircraftById[type], 4);
       s.cash -= monthly * 2;
-      G.makeAircraft(s, type, { owned: false, ageWeeks: 208, deliveryWeek: 6, lease: { lessor: 'Sim', monthly, startWeek: 6, endWeek: 6 + 520, deposit: monthly * 2 } });
+      G.makeAircraft(s, type, { owned: false, ageWeeks: 208, deliveryWeek: s.week + 6, lease: { lessor: 'Sim', monthly, startWeek: s.week + 6, endWeek: s.week + 526, deposit: monthly * 2 } });
     }
   }
   const schedule = () => {
@@ -36,7 +36,7 @@ function play(label, { hub, routes, types, seed = 11, pricing = true }) {
     if (pricing) {
       for (const r of s.routes) {
         if (!r.last || !r.last.seatTotal) continue;
-        const idx = G.priceIndex(r);
+        const idx = G.priceIndex(s, r);
         if (r.last.lf > 0.93) G.setPriceIndex(s, r.id, idx * 1.03);
         else if (r.last.lf < 0.72) G.setPriceIndex(s, r.id, idx * 0.97);
       }
@@ -50,7 +50,7 @@ function play(label, { hub, routes, types, seed = 11, pricing = true }) {
   if (process.env.VERBOSE) {
     for (const r of s.routes) {
       const l = r.last;
-      if (l) console.log(`   ${r.a}-${r.b} ${r.distance}km f=${l.freq} pax=${Math.round(l.paxTotal)} lf=${(l.lf * 100).toFixed(0)}% conn=${Math.round(l.connecting)} idx=${G.priceIndex(r).toFixed(2)} contrib=${G.money(l.contribution)} profit=${G.money(l.profit)}`);
+      if (l) console.log(`   ${r.a}-${r.b} ${r.distance}km f=${l.freq} pax=${Math.round(l.paxTotal)} lf=${(l.lf * 100).toFixed(0)}% conn=${Math.round(l.connecting)} idx=${G.priceIndex(s, r).toFixed(2)} contrib=${G.money(l.contribution)} profit=${G.money(l.profit)}`);
     }
     const c = s.lastReport.cost;
     console.log('   costs', Object.entries(c).map(([k, v]) => `${k}:${G.money(v)}`).join(' '));

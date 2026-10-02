@@ -88,10 +88,11 @@ function market(c) {
   const match = (typeId) => cat === 'all' || G.aircraftById[typeId].cat === cat;
   const leases = s.market.leases.filter((o) => match(o.type)).sort((a, b) => a.lead - b.lead);
   const used = s.market.used.filter((o) => match(o.type)).sort((a, b) => a.price - b.price);
-  const types = G.AIRCRAFT.filter((t) => match(t.id));
+  const year = G.yearOf(s.week);
+  const types = G.AIRCRAFT.filter((t) => match(t.id) && (G.inProduction(t, year) || (t.out != null && year > t.out && year <= t.out + 10)));
   return `<div class="row">Show <select data-change="market-cat">${options(CAT_OPTS, cat)}</select><span class="muted small">Lease and used offers refresh monthly. Factory lead times reflect manufacturer backlogs.</span></div>
   ${panel('Operating lease offers', table(leases, [
-    { h: 'Aircraft', v: (o) => `<b>${esc(typeName(o.type))}</b><br><small class="muted">${o.age ? `${o.age} years old` : 'New build'}</small>` },
+    { h: 'Aircraft', v: (o) => `<b>${esc(typeName(o.type))}</b>${vintage(s, o.type)}<br><small class="muted">${o.age ? `${o.age} years old` : 'New build'}</small>` },
     { h: 'Lessor', v: (o) => esc(o.lessor) },
     { h: 'Rent / month', cls: 'num', v: (o) => money(o.monthly) },
     { h: 'Term', cls: 'num', v: (o) => `${o.termMonths} mo` },
@@ -101,7 +102,7 @@ function market(c) {
     { h: '', v: (o) => `<button class="small primary" data-action="lease-offer" data-id="${o.id}">Sign lease</button>` },
   ], { empty: 'No lease offers for this category right now.' }))}
   ${panel('Used aircraft for sale', table(used, [
-    { h: 'Aircraft', v: (o) => `<b>${esc(typeName(o.type))}</b><br><small class="muted">${o.age} years old</small>` },
+    { h: 'Aircraft', v: (o) => `<b>${esc(typeName(o.type))}</b>${vintage(s, o.type)}<br><small class="muted">${o.age} years old</small>` },
     { h: 'Seller', v: (o) => esc(o.seller) },
     { h: 'Reliability', v: (o) => bar(o.reliability, 100) },
     { h: 'Price', cls: 'num', v: (o) => money(o.price) },
@@ -109,14 +110,14 @@ function market(c) {
     { h: '', v: (o) => `<button class="small" data-action="buy-used" data-id="${o.id}" ${s.cash < o.price ? 'disabled' : ''}>Buy</button>` },
   ], { empty: 'No used aircraft of this category on the market.' }))}
   ${panel('Order new from the manufacturer', table(types, [
-    { h: 'Type', v: (t) => `<b>${esc(t.name)}</b><br><small class="muted">${esc(t.maker)} · ${G.CATEGORY_LABELS[t.cat]}</small>` },
+    { h: 'Type', v: (t) => `<b>${esc(t.name)}</b>${t.fe ? ' <small class="pill">flight engineer</small>' : ''}${t.noise === 2 ? ' <small class="pill warn">Chapter 2</small>' : ''}<br><small class="muted">${esc(t.maker)} · ${G.CATEGORY_LABELS[t.cat]} · built ${t.intro}–${t.out ?? 'today'}</small>` },
     { h: 'Capacity', v: (t) => (t.cat === 'freighter' ? `${t.cargoT} t` : `${G.seatCount(t.config)} seats <small class="muted">(max ${t.maxSeats})</small>`) },
     { h: 'Range', cls: 'num', v: (t) => `${int(t.range)} km` },
     { h: 'Runway', cls: 'num', v: (t) => `${int(t.runway)} m` },
     { h: 'Fuel', cls: 'num', v: (t) => `${t.burn} kg/km` },
     { h: 'List price', cls: 'num', v: (t) => money(t.price) },
-    { h: 'Lead time', v: (t) => (t.lead ? `${t.lead} wk <small class="muted">(~${G.yearOf(s.week + t.lead)})</small>` : '<span class="muted">Out of production</span>') },
-    { h: '', v: (t) => (t.lead ? `<div class="row" data-form><input type="number" name="qty" value="1" min="1" max="50" class="w-60"><button class="small" data-action="order" data-type="${t.id}">Order</button></div>` : '') },
+    { h: 'Lead time', v: (t) => (G.inProduction(t, year) ? `${t.lead} wk <small class="muted">(~${Math.max(G.yearOf(s.week + t.lead), t.intro)})</small>` : `<span class="muted">Production ended ${t.out}</span>`) },
+    { h: '', v: (t) => (G.inProduction(t, year) ? `<div class="row" data-form><input type="number" name="qty" value="1" min="1" max="50" class="w-60"><button class="small" data-action="order" data-type="${t.id}">Order</button></div>` : '') },
   ]))}
   <p class="muted small">Orders need a 20% pre-delivery deposit; the balance is due on delivery (financed automatically with an aircraft loan if cash is short). Volume discounts of 2% per extra aircraft, up to 25%.</p>`;
 }
@@ -130,7 +131,8 @@ function detail(c, ac) {
   const loan = s.loans.find((l) => l.aircraftId === ac.id);
   const conv = G.CONVERSIONS[ac.type];
   const units = G.cabinUnits(t, ac.config);
-  return `<div class="page-head"><h1><a href="#fleet" class="muted">Fleet ›</a> ${ac.reg}</h1><div class="row">${pill(st.label, st.tone)} <span class="muted">${esc(t.name)}</span></div></div>
+  const warnings = [ac.retired && 'Withdrawn: this airframe has reached its life limit. Sell it for scrap or return it.', t.noise === 2 && G.yearOf(s.week) >= 1998 && 'Chapter 2 noise category: banned from North American and European airports from 2002.', t.fe && 'Three-person cockpit: needs a flight engineer on every flight.'].filter(Boolean);
+  return `${warnings.map((x) => `<div class="callout warn">${esc(x)}</div>`).join('')}<div class="page-head"><h1><a href="#fleet" class="muted">Fleet ›</a> ${ac.reg}</h1><div class="row">${pill(st.label, st.tone)} <span class="muted">${esc(t.name)}</span></div></div>
   <div class="grid kpis">
     ${kpi('Age', `${num(G.ageYears(s, ac), 1)} yrs`)}
     ${kpi('Flight hours', int(ac.fh), { sub: `${int(ac.cycles)} cycles` })}
@@ -190,6 +192,13 @@ function detail(c, ac) {
       <button data-action="extend-lease" data-id="${ac.id}">Extend 24 months at 15% lower rent</button>
       <button class="danger" data-action="return-lease" data-id="${ac.id}">Return early (30% of remaining rent)</button>`}
     </div></div>`)}`;
+}
+
+function vintage(s, typeId) {
+  const t = G.aircraftById[typeId];
+  const year = G.yearOf(s.week);
+  if (t.out != null && year > t.out) return ' <small class="pill warn">out of production</small>';
+  return '';
 }
 
 export const actions = {

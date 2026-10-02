@@ -92,6 +92,59 @@ export const RIVALS = [
   R('D0', 'DHL Aviation', 'D0', 'DE', 'cargo', null, ['HKG', 'DXB', 'MIA'], 280, 1.05, 0.45),
 ];
 
+// Founding / ceasing years. Missing founded = long-established; missing ceased = still flying.
+const YEARS = {
+  DL: [1925], UA: [1926], AA: [1930], WN: [1971], AS: [1932], B6: [2000], F9: [1994], AC: [1937], WS: [1996], AM: [1934],
+  Y4: [2006], CM: [1947], AV: [1919], LA: [2012], AR: [1950], BA: [1974], VS: [1984], U2: [1995], FR: [1985], EI: [1936],
+  LH: [1955], AF: [1933], KL: [1919], IB: [1927], VY: [2004], TP: [1945], AZ: [2021], LX: [2002], OS: [1957], SK: [1946],
+  AY: [1923], FI: [1937], LO: [1929], W6: [2004], TK: [1933], PC: [1990], EK: [1985], QR: [1993], EY: [2003], SV: [1945],
+  LY: [1948], MS: [1932], ET: [1945], KQ: [1977], SA: [1934], AT: [1957], AI: [1932], '6E': [2006], UL: [1979], SQ: [1972],
+  TR: [2012], CX: [1946], TG: [1960], AK: [2001], MH: [1972], GA: [1949], PR: [1941], VN: [1956], VJ: [2011], CA: [1988],
+  MU: [1988], CZ: [1988], BR: [1989], KE: [1969], NH: [1952], JL: [1951], QF: [1920], VA: [2000], NZ: [1940], FX: [1973],
+  '5X': [1988], D0: [1983],
+};
+for (const r of RIVALS) [r.founded, r.ceased] = YEARS[r.id] ?? [1920];
+
+// Airlines that are history by 2027 — and may yet survive in yours.
+// successor: who inherits the network when they go.
+const H = (id, name, code, country, type, alliance, hubs, fleet, quality, aggression, founded, ceased, successor) => ({
+  ...R(id, name, code, country, type, alliance, hubs, fleet, quality, aggression), founded, ceased, successor, historic: true,
+});
+RIVALS.push(
+  H('PA', 'Pan Am', 'PA', 'US', 'legacy', null, ['JFK', 'MIA', 'SFO'], 150, 1.15, 0.5, 1927, 1991, 'DL'),
+  H('TW', 'Trans World Airlines', 'TW', 'US', 'legacy', null, ['JFK', 'LAX'], 180, 1.05, 0.5, 1930, 2001, 'AA'),
+  H('EA', 'Eastern Air Lines', 'EA', 'US', 'legacy', null, ['ATL', 'MIA', 'BOS'], 250, 0.95, 0.55, 1926, 1991),
+  H('BN', 'Braniff International', 'BN', 'US', 'legacy', null, ['DFW'], 110, 1.0, 0.6, 1928, 1982),
+  H('CO', 'Continental Airlines', 'CO', 'US', 'legacy', 'SkyTeam', ['IAH', 'EWR', 'DEN'], 300, 1.0, 0.55, 1934, 2012, 'UA'),
+  H('NW', 'Northwest Airlines', 'NW', 'US', 'legacy', 'SkyTeam', ['MSP', 'DTW', 'NRT'], 330, 0.95, 0.5, 1926, 2010, 'DL'),
+  H('US', 'US Airways', 'US', 'US', 'legacy', 'Star Alliance', ['PHL', 'CLT', 'PHX'], 340, 0.9, 0.5, 1937, 2015, 'AA'),
+  H('WA', 'Western Airlines', 'WA', 'US', 'legacy', null, ['LAX', 'SLC'], 80, 1.0, 0.45, 1926, 1987, 'DL'),
+  H('PE', 'People Express', 'PE', 'US', 'ulcc', null, ['EWR'], 70, 0.7, 0.9, 1981, 1987, 'CO'),
+  H('VX', 'Virgin America', 'VX', 'US', 'lcc', null, ['SFO', 'LAX'], 60, 1.15, 0.5, 2007, 2018, 'AS'),
+  H('HA', 'Hawaiian Airlines', 'HA', 'US', 'legacy', null, ['HNL'], 60, 1.0, 0.4, 1929, 2024, 'AS'),
+  H('MX', 'Mexicana', 'MX', 'MX', 'legacy', null, ['MEX', 'CUN'], 60, 0.9, 0.45, 1921, 2010),
+  H('RG', 'Varig', 'RG', 'BR', 'legacy', 'Star Alliance', ['GIG', 'GRU'], 80, 1.0, 0.45, 1927, 2006),
+  H('LN', 'LAN Airlines', 'LN', 'CL', 'legacy', 'oneworld', ['SCL', 'LIM'], 90, 1.0, 0.5, 1929, 2012, 'LA'),
+  H('CP', 'Canadian Airlines', 'CP', 'CA', 'legacy', 'oneworld', ['YVR', 'YYC', 'YYZ'], 80, 0.95, 0.45, 1942, 2001, 'AC'),
+  H('BO', 'BOAC', 'BO', 'GB', 'legacy', null, ['LHR'], 70, 1.05, 0.4, 1939, 1974, 'BA'),
+  H('BE', 'British European Airways', 'BE', 'GB', 'legacy', null, ['LHR', 'MAN'], 90, 0.95, 0.4, 1946, 1974, 'BA'),
+  H('BR2', 'British Caledonian', 'BR', 'GB', 'legacy', null, ['LGW'], 35, 1.05, 0.5, 1970, 1988, 'BA'),
+  H('GK', 'Laker Airways', 'GK', 'GB', 'ulcc', null, ['LGW'], 20, 0.8, 0.9, 1966, 1982),
+  H('ZB', 'Monarch Airlines', 'ZB', 'GB', 'lcc', null, ['LGW', 'MAN'], 40, 0.85, 0.45, 1968, 2017),
+  H('SR', 'Swissair', 'SR', 'CH', 'legacy', null, ['ZRH', 'GVA'], 80, 1.2, 0.45, 1931, 2002, 'LX'),
+  H('SN', 'Sabena', 'SN', 'BE', 'legacy', null, ['BRU'], 50, 0.95, 0.4, 1923, 2001),
+  H('AZ1', 'Alitalia', 'AZ', 'IT', 'legacy', 'SkyTeam', ['FCO', 'MXP'], 150, 0.95, 0.45, 1946, 2021, 'AZ'),
+  H('IT', 'Air Inter', 'IT', 'FR', 'legacy', null, ['ORY', 'LYS', 'NCE'], 60, 0.9, 0.4, 1954, 1997, 'AF'),
+  H('AB', 'Air Berlin', 'AB', 'DE', 'lcc', 'oneworld', ['BER', 'HAM'], 140, 0.9, 0.5, 1978, 2017),
+  H('OA', 'Olympic Airways', 'OA', 'GR', 'legacy', null, ['ATH'], 50, 0.85, 0.4, 1957, 2009),
+  H('MA', 'Malév', 'MA', 'HU', 'legacy', null, ['BUD'], 30, 0.85, 0.35, 1946, 2012),
+  H('9W', 'Jet Airways', '9W', 'IN', 'legacy', null, ['BOM', 'DEL'], 120, 1.0, 0.55, 1993, 2019),
+  H('IK', 'Kingfisher Airlines', 'IT', 'IN', 'legacy', null, ['BOM', 'BLR'], 65, 1.05, 0.6, 2005, 2012),
+  H('AN', 'Ansett Australia', 'AN', 'AU', 'legacy', 'Star Alliance', ['MEL', 'SYD'], 100, 0.95, 0.5, 1936, 2001),
+  H('CAAC', 'CAAC Airlines', 'CA', 'CN', 'legacy', null, ['PEK', 'PVG', 'CAN'], 150, 0.7, 0.3, 1949, 1988, 'CA'),
+  H('MSA', 'Malaysia-Singapore Airlines', 'ML', 'SG', 'legacy', null, ['SIN', 'KUL'], 30, 0.95, 0.4, 1947, 1972, 'SQ'),
+);
+
 export const rivalById = Object.fromEntries(RIVALS.map((r) => [r.id, r]));
 
 export const ALLIANCES = {

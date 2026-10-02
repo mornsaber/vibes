@@ -2,7 +2,7 @@
 // MRO providers, shop visit booking, grounding for overdue checks, and
 // dispatch reliability.
 
-import { CHECKS, CHECK_ORDER, FACILITIES, MRO_PROVIDERS, mroById } from '../data/aircraft.js';
+import { CHECKS, CHECK_ORDER, FACILITIES, MRO_PROVIDERS, mroById, LIFE_LIMIT_YEARS } from '../data/aircraft.js';
 import { airportByCode } from '../data/airports.js';
 import { clamp, fail, ok, log, money, sum } from './core.js';
 import { typeOf, ageYears, isDelivered, inDowntime, addWork, finishWork } from './fleet.js';
@@ -183,7 +183,13 @@ export function maintenanceTick(state) {
     const decay = hours * 0.0045 * (1 + ageYears(state, ac) * 0.025) * (engShort ? 1.5 : 1) * (overdue ? 2 : 1);
     ac.reliability = clamp(ac.reliability - decay, 20, 100);
 
-    if (inDowntime(state, ac) || ac.booked) continue;
+    if (!ac.retired && ageYears(state, ac) >= LIFE_LIMIT_YEARS) {
+      ac.retired = true;
+      ac.grounded = 'Retired: airframe life limit';
+      ac.schedule = [];
+      log(state, `${ac.reg} has reached its ${LIFE_LIMIT_YEARS}-year airframe life limit and is withdrawn. Sell it for scrap or return it.`, 'bad', 'engineering');
+    }
+    if (ac.retired || inDowntime(state, ac) || ac.booked) continue;
 
     // Regulator grounds aircraft more than 10% past a check limit.
     const critical = statuses.find((s) => s.critical);

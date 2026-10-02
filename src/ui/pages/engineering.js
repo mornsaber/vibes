@@ -3,7 +3,7 @@ import { formValues } from '../app.js';
 
 export function render(c) {
   const tab = c.params[0] ?? 'schedule';
-  const body = { mro, outsource, schedule, upgrades, cabin }[tab] ?? schedule;
+  const body = { mro, outsource, schedule, upgrades, cabin, safety }[tab] ?? schedule;
   const s = c.state;
   const delivered = s.fleet.filter((a) => G.isDelivered(s, a));
   const inShop = delivered.filter((a) => a.downtime && a.downtime.untilWeek > s.week).length;
@@ -17,7 +17,7 @@ export function render(c) {
     ${kpi('Engineers', `${int(s.staff.engineers.count)}${eng ? ` / ${int(eng.required)}` : ''}`, { href: '#management/staffing' })}
     ${kpi('Check spend (last wk)', money(s.lastReport?.cost.maintenance ?? 0))}
   </div>
-  ${tabs('engineering', [['schedule', 'Check schedule'], ['mro', 'MRO facilities'], ['outsource', 'Outsourcing'], ['upgrades', 'Upgrades'], ['cabin', 'Cabin']], tab)}
+  ${tabs('engineering', [['schedule', 'Check schedule'], ['mro', 'MRO facilities'], ['outsource', 'Outsourcing'], ['upgrades', 'Upgrades'], ['cabin', 'Cabin'], ['safety', 'Safety']], tab)}
   ${body(c)}`;
 }
 
@@ -106,6 +106,41 @@ function cabin(c) {
     { h: '', v: (ac) => `<a class="small" href="#fleet/ac/${ac.id}">Edit layout ›</a>` },
   ], { empty: 'No passenger aircraft.' }))}
   ${panel('How cabins work', `<p class="small">Each type has a floor area measured in economy-seat units. Premium seats use more: premium economy ${G.CABIN.W.units.narrow}–${G.CABIN.W.units.wide}, business ${G.CABIN.J.units.narrow} on narrowbodies (recliners) and ${G.CABIN.J.units.wide} on widebodies (lie-flat beds), first ${G.CABIN.F.units.wide}. Business travellers on long flights pay ~4× economy; dense all-economy layouts suit leisure routes. Seat counts drive cabin crew requirements too.</p>`)}`;
+}
+
+function safety(c) {
+  const s = c.state;
+  const year = s.history.filter((h) => s.week - h.week < 52);
+  const flights = year.reduce((t, h) => t + h.flights, 0);
+  const recent = s.incidents.filter((i) => s.week - i.week < 52);
+  const count = (sev) => recent.filter((i) => i.severity === sev).length;
+  const fleet = s.fleet.filter((a) => G.isDelivered(s, a) && !a.retired).map((a) => ({ a, f: G.riskFactors(s, a) })).sort((x, y) => y.f.total - x.f.total);
+  const sevTone = { minor: '', weather: 'warn', serious: 'bad', 'hull loss': 'bad' };
+  return `<div class="grid kpis">
+    ${kpi('Flights (12 mo)', int(flights))}
+    ${kpi('Minor incidents', count('minor'))}
+    ${kpi('Serious incidents', count('serious'), { cls: count('serious') ? 'bad' : '' })}
+    ${kpi('Hull losses', count('hull loss'), { cls: count('hull loss') ? 'bad' : '' })}
+    ${kpi('Weather damage', count('weather'))}
+    ${kpi('Era risk', `${num(G.eraSafety(G.yearOf(s.week)), 1)}×`, { sub: 'vs. 2020s baseline' })}
+  </div>
+  ${panel('Risk by aircraft', `${table(fleet.slice(0, 25), [
+    { h: 'Aircraft', v: (x) => `<a href="#fleet/ac/${x.a.id}">${x.a.reg}</a> <small class="muted">${esc(typeName(x.a.type))}</small>` },
+    { h: 'Overall risk', v: (x) => `<b class="${x.f.total / x.f.era > 3 ? 'bad' : x.f.total / x.f.era > 1.6 ? 'warn' : ''}">${num(x.f.total / x.f.era, 2)}×</b>` },
+    { h: 'Reliability', cls: 'num', v: (x) => `${num(x.f.reliability, 2)}×` },
+    { h: 'Checks', cls: 'num', v: (x) => (x.f.maintenance > 1 ? '<span class="bad">overdue ×3</span>' : '✓') },
+    { h: 'Crew', cls: 'num', v: (x) => `${num(x.f.pilots, 2)}×` },
+    { h: 'Engineers', cls: 'num', v: (x) => `${num(x.f.engineers, 2)}×` },
+    { h: 'Age/design', cls: 'num', v: (x) => `${num(x.f.age * x.f.design, 2)}×` },
+  ], { empty: 'No aircraft in service.' })}
+  <p class="muted small">Risk multiplies a baseline of roughly 0.15 hull losses per million flights (×${num(G.eraSafety(G.yearOf(s.week)), 1)} in this era). Keep checks current, reliability high, crews experienced and engineers fully staffed. Hijacking risk falls with your <a href="#management/service">security standard</a> (now ${s.service.security ?? 3}/5).</p>`)}
+  ${panel('Incident log', table(s.incidents.slice(0, 60), [
+    { h: 'Date', v: (i) => G.dateLabel(i.week) },
+    { h: 'Severity', v: (i) => pill(i.severity, sevTone[i.severity]) },
+    { h: 'Aircraft', v: (i) => `${i.reg} <small class="muted">${esc(typeName(i.type))}</small>` },
+    { h: 'What happened', v: (i) => `<small>${esc(i.text)}</small>` },
+    { h: 'Cost', cls: 'num', v: (i) => money(i.cost) },
+  ], { empty: 'No incidents recorded. Long may it last.' }))}`;
 }
 
 export const actions = {
