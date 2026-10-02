@@ -1,0 +1,15 @@
+{
+  "name": "airline-executive-simulator",
+  "version": "0.1.0",
+  "description": "Run an airline from startup to global carrier: build a network, manage a fleet, and keep the board happy.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node scripts/serve.js",
+    "test": "node --test test/*.test.js",
+    "simulate": "node scripts/simulate.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
