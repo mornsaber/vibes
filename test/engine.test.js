@@ -1366,3 +1366,42 @@ test('a whole sub-fleet can be refitted and new orders use the standard layout',
   const ordered = s.fleet.find((x) => x.type === 'a320n' && x.deliveryWeek > s.week);
   assert.equal(G.seatCount(ordered?.config ?? s.orders.at(-1).config), G.seatCount(p.config));
 });
+
+// ---------------------------------------------------------------------------
+// Balance fixes: slot costing, connecting crowds, pending refits.
+
+test('auto-assign buys only the slots that are missing at each end', () => {
+  const s = setup({ hub: 'JFK' });
+  manual(s);
+  const { route } = G.openRoute(s, 'JFK', 'CDG');
+  const ac = quickLease(s, 'b789');
+  const cash = s.cash;
+  assert.ok(G.autoAssign(s, ac, route, 7).ok, 'spare JFK slots plus cheap Paris slots');
+  assert.equal(G.entryFreq(ac, route.id), 7);
+  assert.ok(cash - s.cash < 7 * G.slotInfo(s, 'CDG').price + 1, 'paid for Paris slots only');
+});
+
+test('a crowd of one-stop itineraries cannot outweigh the nonstops', () => {
+  const s = setup({ hub: 'JFK' });
+  const biz = (G.airportByCode.JFK.biz + G.airportByCode.CDG.biz) / 2;
+  const rv = G.rivalsOn(s, 'JFK', 'CDG', G.rivalsContext(s));
+  const appeal = (nonstop) => rv.filter((r) => r.nonstop === nonstop).reduce((a, r) => a + G.rivalAppeal(s, r, 'Y', biz), 0);
+  assert.ok(rv.filter((r) => !r.nonstop).length > 8, 'many connecting options');
+  assert.ok(appeal(false) < appeal(true) * 1.2, 'connections hold no more than about half the rival appeal');
+  assert.equal(G.connectingWeight(2), 1, 'a couple of connections are unaffected');
+});
+
+test('the cabin a refit is installing is visible while the aircraft is in the shop', () => {
+  const s = setup();
+  const ac = quickLease(s, 'a320n');
+  s.cash = 1e9;
+  const p = G.cabinPresets(G.aircraftById.a320n, G.yearOf(s.week)).find((x) => x.id === 'economy');
+  assert.equal(G.pendingCabin(s, ac), null);
+  assert.ok(G.retrofitCabin(s, ac.id, p.config, p.cabin).ok);
+  const pending = G.pendingCabin(s, ac);
+  assert.equal(G.seatCount(pending.config), G.seatCount(p.config));
+  assert.notEqual(G.seatCount(ac.config), G.seatCount(p.config), 'old layout still flies until the work completes');
+  run(s, 3);
+  assert.equal(G.pendingCabin(s, ac), null);
+  assert.equal(G.seatCount(ac.config), G.seatCount(p.config));
+});

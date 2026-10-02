@@ -64,24 +64,17 @@ function needScore(state, ac, r) {
 // Assign within the slots we hold, buying more with up to 10% of cash; if that
 // isn't enough, fly fewer frequencies. Returns the setFrequency result.
 export function autoAssign(state, ac, r, freq, current = 0) {
-  let room = Infinity;
-  let price = 0;
-  for (const code of [r.a, r.b]) {
-    const info = slotInfo(state, code);
-    if (!info) continue;
-    room = Math.min(room, info.held - info.used);
-    price = Math.max(price, info.price);
-  }
+  const ends = [r.a, r.b].map((code) => slotInfo(state, code)).filter(Boolean).map((i) => ({ room: Math.max(0, i.held - i.used), pool: i.pool, price: i.price }));
   const extra = freq - current;
-  if (extra > room) {
-    // Buy as many slot pairs as 10% of cash allows, and fly what fits.
-    const affordable = price > 0 ? Math.floor((state.cash * 0.1) / price) : 0;
-    const buy = Math.min(extra - Math.max(0, room), Math.max(0, affordable));
-    freq = current + Math.max(0, room) + buy;
-    if (freq - current < (current ? 1 : 3)) return fail('No slots');
-    return setFrequency(state, ac.id, r.id, freq, { autoSlots: buy > 0 });
-  }
-  return setFrequency(state, ac.id, r.id, freq, { autoSlots: false });
+  if (ends.every((e) => e.room >= extra)) return setFrequency(state, ac.id, r.id, freq, { autoSlots: false });
+  // Buy only the slots that are missing at each end, within 10% of cash and this month's pool; fly what fits.
+  const budget = state.cash * 0.1;
+  const cost = (n) => ends.reduce((a, e) => a + Math.max(0, n - e.room) * e.price, 0);
+  const fits = (n) => ends.every((e) => n - e.room <= e.pool) && cost(n) <= budget;
+  let n = extra;
+  while (n > 0 && !fits(n)) n--;
+  if (n < (current ? 1 : 3)) return fail('No slots');
+  return setFrequency(state, ac.id, r.id, current + n, { autoSlots: ends.some((e) => n > e.room) });
 }
 
 // Weekly: put idle aircraft to work on the routes with the most unmet demand.

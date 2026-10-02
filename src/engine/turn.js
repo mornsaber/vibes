@@ -123,7 +123,7 @@ function createGame({ name = 'Skyward Air', code = 'SK', hub = 'ORD', seed, diff
   }
   // Founding team hired before launch: enough crew for the first couple of narrowbodies.
   for (const r of ROLE_IDS) state.staff[r] = newWorkforce(state, r, { pilots: 24, cabin: 60, engineers: 12, ground: 50, admin: 18 }[r]);
-  if (ap.slots) state.slots[hub] = { held: ap.slots === 2 ? 42 : 70, pool: ap.slots === 2 ? 6 : 60 };
+  if (ap.slots) state.slots[hub] = { held: ap.slots === 2 ? 84 : 70, pool: ap.slots === 2 ? 6 : 60 };
   initRivals(state);
   buildTimeline(state);
   refreshMarkets(state, true);

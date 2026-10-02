@@ -22,8 +22,9 @@ import { dispatchReliability } from './maintenance.js';
 import { crewFactor, cockpitCrew, cabinCrewPerFlight } from './staff.js';
 import { airspaceFuelMult, tickShockRegions } from './safety.js';
 
-export const MX_HR = { tiny: 120, small: 350, narrow: 550, wide: 1300, jumbo: 2000 };
-export const NAV_KM = { tiny: 0.1, small: 0.35, narrow: 0.7, wide: 1.4, jumbo: 2.0 };
+// Hourly line maintenance and parts (checks are charged separately when they happen).
+export const MX_HR = { tiny: 120, small: 350, narrow: 550, wide: 950, jumbo: 1500 };
+export const NAV_KM = { tiny: 0.1, small: 0.35, narrow: 0.7, wide: 1.0, jumbo: 1.4 };
 export const LANDING = { tiny: 120, small: 600, narrow: 1500, wide: 4500, jumbo: 7000 };
 const ALL = [...CLASSES, 'C'];
 

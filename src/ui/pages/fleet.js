@@ -170,30 +170,39 @@ function readCabinForm(root) {
   return { cfg, cabin };
 }
 
+// The layout the editor starts from: the one in the shop if a refit is under way.
+function baseLayout(s, ac) {
+  const p = G.pendingCabin(s, ac);
+  return p ? { config: p.config, cabin: p.cabin, pending: p } : { config: ac.config, cabin: ac.cabin };
+}
+
 function cabinSummary(s, ac, t, cfg, cabin) {
-  const full = { ...G.defaultCabin(t), ...(ac.cabin ?? {}), ...cabin };
+  const base = baseLayout(s, ac);
+  const full = { ...G.defaultCabin(t), ...(base.cabin ?? {}), ...cabin };
   const units = G.cabinUnits(t, cfg, full);
   const seats = G.seatCount(cfg);
-  const changed = [...G.CLASSES, 'C'].some((k) => (ac.config[k] || 0) !== cfg[k]) || G.CLASSES.some((k) => cfg[k] && (ac.cabin?.[k] ?? G.defaultCabin(t)[k]) !== full[k]);
+  const changed = [...G.CLASSES, 'C'].some((k) => (base.config[k] || 0) !== cfg[k]) || G.CLASSES.some((k) => cfg[k] && (base.cabin?.[k] ?? G.defaultCabin(t)[k]) !== full[k]);
   const problems = [units > t.maxSeats + 1e-9 && `${num(units - t.maxSeats, 0)} floor units too many`, seats > t.maxSeats && `over the ${t.maxSeats}-passenger exit limit`].filter(Boolean);
   return {
     plan: floorPlan(t, cfg, full),
     text: `${seats} seats · ${num(units, 0)} of ${t.maxSeats} floor units · ${G.cabinCrewPerFlight(cfg)} cabin crew per flight${problems.length ? ` — ${problems.join(', ')}` : ''}`,
     bad: problems.length > 0,
-    cost: changed ? `Retrofit ≈ ${money(G.retrofitCost(ac, cfg, full) * (G.isDelivered(s, ac) ? 1 : 0.5))}` : 'Current layout',
+    cost: !changed ? (base.pending ? 'Refit under way' : 'Current layout') : `Retrofit ≈ ${money(G.retrofitCost(ac, cfg, full) * (G.isDelivered(s, ac) ? 1 : 0.5))}`,
   };
 }
 
 // draft: unsaved edits kept across re-renders.
 function cabinEditor(s, ac, t, draft) {
   const year = G.yearOf(s.week);
-  const config = draft?.cfg ?? ac.config;
-  const cabin = { ...G.defaultCabin(t), ...(ac.cabin ?? {}), ...(draft?.cabin ?? {}) };
+  const base = baseLayout(s, ac);
+  const config = draft?.cfg ?? base.config;
+  const cabin = { ...G.defaultCabin(t), ...(base.cabin ?? {}), ...(draft?.cabin ?? {}) };
   const presets = G.cabinPresets(t, year);
   const sameType = s.fleet.filter((a) => a.type === t.id && !a.retired).length;
   const std = s.layouts?.[t.id];
   const sum = cabinSummary(s, ac, t, { F: 0, J: 0, W: 0, Y: 0, C: 0, ...config }, cabin);
   return `<div data-form data-cabin="${ac.id}">
+    ${base.pending ? `<div class="callout info small">Refit in the shop: showing the new layout (${G.CLASSES.filter((k) => base.config[k]).map((k) => `${G.CABIN[k].short}${base.config[k]}`).join(' ')}), back in service in ${base.pending.untilWeek - s.week} wk.</div>` : ''}
     <div class="row" style="gap:6px;margin-bottom:8px"><span class="muted small">Start from:</span>${presets.map((p) => `<button class="small" data-action="cfg-preset" data-type="${t.id}" data-preset="${p.id}" title="${esc(p.desc)} (${G.CLASSES.filter((k) => p.config[k]).map((k) => `${k}${p.config[k]}`).join(' ')})">${esc(p.name)}</button>`).join('')}</div>
     <div id="cfg-plan">${sum.plan}</div>
     <div class="grid cols-4 tight">${G.CLASSES.map((k) => {

@@ -295,8 +295,15 @@ function rivalsOnUncached(state, a, b, k, adj, ctx) {
       out.push({ id, nonstop: true, fare: state.rivals[id].fareIdx * (m.fare ?? 1), cap: state.rivals[id].capIdx * (m.cap ?? 1), entered: true });
     }
   }
+  // One-stop itineraries compete with each other for the same few travellers:
+  // a crowd of them on a big long-haul market must not outweigh the nonstops.
+  const conn = connectingWeight(out.filter((e) => !e.nonstop).length);
+  for (const e of out) if (!e.nonstop) e.w = conn;
   return out;
 }
+
+// Weight of each connecting option when n are on offer (diminishing returns).
+export const connectingWeight = (n) => Math.min(1, 1.5 / Math.sqrt(Math.max(1, n)));
 
 // Fast path for the weekly simulation: the per-rival part of rivalAppeal is the
 // same on every market this week, so it is computed once per turn and the
@@ -324,7 +331,7 @@ export function rivalAppealFast(state, ctx, entry, cls, biz) {
   const ratio = v.type.fare * entry.fare;
   if (cls === 'C') {
     const cliff = ratio > 1.2 ? Math.exp(-(ratio - 1.2) * 5) : 1; // priceEffect's ceiling at biz = 1
-    return v.cw * entry.cap * powMemo(ctx, 'C', ratio) * cliff * (entry.nonstop ? 1 : 0.6);
+    return v.cw * entry.cap * powMemo(ctx, 'C', ratio) * cliff * (entry.nonstop ? 1 : 0.6 * (entry.w ?? 1));
   }
   if (v.cargo) return 0;
   if ((cls === 'J' || cls === 'F' || cls === 'W') && !v.premium) return cls === 'W' ? 0 : 0.05;
@@ -332,7 +339,7 @@ export function rivalAppealFast(state, ctx, entry, cls, biz) {
   const ceiling = 1.05 + 0.15 * biz + (cls === 'J' || cls === 'F' ? 0.1 : 0);
   const r = Math.max(0.05, ratio);
   const cliff = r > ceiling ? Math.exp(-(r - ceiling) * 5) : 1;
-  return v.k * Math.min(1.6, entry.cap) * powMemo(ctx, cls, ratio) * cliff * (entry.nonstop ? (v.premium ? 1.4 : 1.2) : 0.45);
+  return v.k * Math.min(1.6, entry.cap) * powMemo(ctx, cls, ratio) * cliff * (entry.nonstop ? (v.premium ? 1.4 : 1.2) : 0.45 * (entry.w ?? 1));
 }
 
 // How attractive a rival's offer is for one cabin on this pair.
@@ -341,7 +348,7 @@ export function rivalAppeal(state, entry, cls, biz) {
   const type = RIVAL_TYPES[rival.type];
   if (cls === 'C') {
     const w = rival.type === 'cargo' ? 1.3 : type.premium ? 0.5 : 0.15;
-    return w * entry.cap * priceEffect(type.fare * entry.fare, 1, 'C') * (entry.nonstop ? 1 : 0.6);
+    return w * entry.cap * priceEffect(type.fare * entry.fare, 1, 'C') * (entry.nonstop ? 1 : 0.6 * (entry.w ?? 1));
   }
   if (rival.type === 'cargo') return 0;
   if ((cls === 'J' || cls === 'F' || cls === 'W') && !type.premium) return cls === 'W' ? 0 : 0.05;
@@ -356,6 +363,6 @@ export function rivalAppeal(state, entry, cls, biz) {
     Math.min(1.6, entry.cap) *
     priceEffect(type.fare * entry.fare, 1, cls, biz) *
     // Incumbents run many daily frequencies; network carriers dominate their hubs.
-    (entry.nonstop ? (type.premium ? 1.4 : 1.2) : 0.45)
+    (entry.nonstop ? (type.premium ? 1.4 : 1.2) : 0.45 * (entry.w ?? 1))
   );
 }

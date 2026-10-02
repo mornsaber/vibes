@@ -485,6 +485,10 @@ export const familyMxFactor = (count) => (count >= 12 ? 0.9 : count >= 6 ? 0.95 
 
 export function commonality(state) {
   const list = fleetFamilies(state);
+  if (state.settings?.commonality === false) {
+    // Effects switched off (used by the balance harness for comparison).
+    return { families: list.length, list, pilotFactor: 1, cabinFactor: 1, engineerFactor: 1, overhead: 0, mx: Object.fromEntries(list.map((f) => [f.family, 1])) };
+  }
   const extra = Math.max(0, list.length - 1);
   return {
     families: list.length,
@@ -553,6 +557,13 @@ export function cabinPresets(type, year) {
   return list.filter((p) => validateConfig(type, p.config, p.cabin, year).ok);
 }
 
+// The layout an aircraft will come out of the shop with, if a refit is under way.
+export function pendingCabin(state, ac) {
+  const d = ac.downtime;
+  if (!d || d.untilWeek <= state.week || !d.apply?.config) return null;
+  return { config: d.apply.config, cabin: d.apply.cabin ?? ac.cabin, untilWeek: d.untilWeek };
+}
+
 // Retrofit every aircraft of a type to one layout.
 export function retrofitFleetType(state, typeId, config, cabin) {
   const type = aircraftById[typeId];
@@ -561,7 +572,7 @@ export function retrofitFleetType(state, typeId, config, cabin) {
   const v = validateConfig(type, config, cabin, year);
   if (!v.ok) return v;
   const same = (ac) => {
-    const pending = ac.downtime?.untilWeek > state.week ? ac.downtime.apply : null; // a refit already in the shop counts
+    const pending = pendingCabin(state, ac); // a refit already in the shop counts
     const cfg = pending?.config ?? ac.config;
     const cab = pending?.cabin ?? ac.cabin;
     return [...CLASSES, 'C'].every((c) => (cfg[c] || 0) === config[c]) && CLASSES.every((c) => !config[c] || (cab?.[c] ?? defaultCabin(type)[c]) === cabin[c]);
