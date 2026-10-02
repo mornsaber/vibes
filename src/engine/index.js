@@ -1,0 +1,17 @@
+// Public engine API.
+export * from './core.js';
+export * from './market.js';
+export * from './fleet.js';
+export * from './network.js';
+export * from './maintenance.js';
+export * from './staff.js';
+export * from './ops.js';
+export * from './finance.js';
+export * from './rivals.js';
+export * from './contracts.js';
+export * from './events.js';
+export * from './turn.js';
+export { aircraftById, AIRCRAFT, CLASSES, CABIN, CHECKS, CHECK_ORDER, UPGRADES, FACILITIES, MRO_PROVIDERS, mroById, CATEGORY_LABELS, CONVERSIONS, cabinUnits, seatCount } from '../data/aircraft.js';
+export { AIRPORTS, airportByCode, COUNTRIES, REGIONS } from '../data/airports.js';
+export { RIVALS, rivalById, RIVAL_TYPES, ALLIANCES } from '../data/rivals.js';
+export { ROLES, ROLE_IDS, SERVICE, SERVICE_IDS, VENTURES, RATINGS } from '../data/business.js';

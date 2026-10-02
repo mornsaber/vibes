@@ -1,39 +1,69 @@
-// Balance check: plays a few scripted strategies headlessly and prints results.
-import { newGame, openRoute, leaseAircraft, assignAircraft, advanceWeek, resolveEvent, money, sharePrice, setFare } from '../src/engine.js';
+// Balance harness: plays scripted strategies headlessly and prints results.
+// Usage: npm run simulate [-- years]
+import * as G from '../src/engine/index.js';
 
-function play(label, hub, plan, weeks = 104, seed = 42) {
-  const s = newGame({ name: 'Sim Air', hub, seed });
-  for (const [to, type, n] of plan) {
-    const { route, error } = openRoute(s, hub, to);
-    if (error) throw new Error(error);
+const years = Number(process.argv[2]) || 2;
+
+function play(label, { hub, routes, types, seed = 11, pricing = true }) {
+  const s = G.newGame({ name: 'Sim Air', code: 'SM', hub, seed });
+  for (const to of routes) {
+    const r = G.openRoute(s, hub, to);
+    if (!r.ok) console.log('  open failed', to, r.error);
+  }
+  // Lease the requested types from the market (take the soonest offers of each type, else any).
+  // Lease every aircraft at market rate (4-year-old frames, 6-week lead) so strategies compare fairly.
+  for (const [type, n] of Object.entries(types)) {
     for (let i = 0; i < n; i++) {
-      const { aircraft } = leaseAircraft(s, type);
-      assignAircraft(s, aircraft.id, route.id);
+      const monthly = G.monthlyLeaseRate(s, G.aircraftById[type], 4);
+      s.cash -= monthly * 2;
+      G.makeAircraft(s, type, { owned: false, ageWeeks: 208, deliveryWeek: 6, lease: { lessor: 'Sim', monthly, startWeek: 6, endWeek: 6 + 520, deposit: monthly * 2 } });
     }
   }
-  for (let w = 0; w < weeks && s.status === 'playing'; w++) {
-    if (s.pendingEvent) resolveEvent(s, s.pendingEvent.choices.findIndex((c) => !c.disabled));
-    advanceWeek(s);
-    // A sensible player nudges fares toward a ~85% load factor.
-    for (const r of s.routes) {
-      if (!r.last) continue;
-      if (r.last.loadFactor > 0.95) setFare(s, r.id, r.fare * 1.04);
-      else if (r.last.loadFactor < 0.75) setFare(s, r.id, r.fare * 0.97);
+  const schedule = () => {
+    for (const ac of s.fleet) {
+      if (ac.schedule.length || G.typeOf(ac).cat === 'freighter') continue;
+      const opts = s.routes
+        .map((r) => ({ r, cap: G.canOperate(s, ac, r).ok ? G.maxFrequency(s, ac, r) : 0, have: G.routeFreq(s, r) }))
+        .filter((x) => x.cap > 0)
+        .sort((a, b) => a.have - b.have || b.r.distance - a.r.distance);
+      if (opts[0]) G.setFrequency(s, ac.id, opts[0].r.id, Math.min(opts[0].cap, 14));
+    }
+  };
+  for (let w = 0; w < years * 52 && s.status === 'playing'; w++) {
+    if (s.pendingEvent) G.resolveEvent(s, s.pendingEvent.choices.findIndex((c) => !c.disabled));
+    schedule();
+    G.advanceWeek(s);
+    if (pricing) {
+      for (const r of s.routes) {
+        if (!r.last || !r.last.seatTotal) continue;
+        const idx = G.priceIndex(r);
+        if (r.last.lf > 0.93) G.setPriceIndex(s, r.id, idx * 1.03);
+        else if (r.last.lf < 0.72) G.setPriceIndex(s, r.id, idx * 0.97);
+      }
     }
   }
   const yr = s.history.slice(-52);
-  const profit = yr.reduce((a, h) => a + h.profit, 0);
-  const lf = yr.reduce((a, h) => a + h.loadFactor, 0) / yr.length;
-  console.log(`${label.padEnd(34)} status=${s.status.padEnd(8)} cash=${money(s.cash).padStart(8)} lastYrProfit=${money(profit).padStart(8)} LF=${(lf * 100).toFixed(0)}% share=$${sharePrice(s).toFixed(2)} conf=${Math.round(s.board.confidence)}`);
-  for (const r of s.routes) {
-    const x = r.last;
-    console.log(`   ${r.from}-${r.to} ${r.distance}km comp=${r.competitors} ac=${x.aircraft} rt=${x.roundTrips} dem=${x.demand} pax=${x.pax} LF=${(x.loadFactor*100).toFixed(0)}% fare=$${r.fare} contrib=${money(x.contribution)}`);
+  const sumv = (f) => yr.reduce((a, h) => a + f(h), 0);
+  console.log(
+    `${label.padEnd(30)} ${s.status.padEnd(9)} cash ${G.money(s.cash).padStart(8)}  yr profit ${G.money(sumv((h) => h.profit)).padStart(8)}  yr rev ${G.money(sumv((h) => h.revenue)).padStart(8)}  LF ${(sumv((h) => h.lf) / yr.length * 100).toFixed(0)}%  OTP ${(sumv((h) => h.otp) / yr.length * 100).toFixed(0)}%  ${s.finance.rating}  rep ${s.reputation.toFixed(0)}  board ${s.board.confidence.toFixed(0)}  fleet ${s.fleet.length}`,
+  );
+  if (process.env.VERBOSE) {
+    for (const r of s.routes) {
+      const l = r.last;
+      if (l) console.log(`   ${r.a}-${r.b} ${r.distance}km f=${l.freq} pax=${Math.round(l.paxTotal)} lf=${(l.lf * 100).toFixed(0)}% conn=${Math.round(l.connecting)} idx=${G.priceIndex(r).toFixed(2)} contrib=${G.money(l.contribution)} profit=${G.money(l.profit)}`);
+    }
+    const c = s.lastReport.cost;
+    console.log('   costs', Object.entries(c).map(([k, v]) => `${k}:${G.money(v)}`).join(' '));
+    console.log('   rev', Object.entries(s.lastReport.revenue).map(([k, v]) => `${k}:${G.money(v)}`).join(' '));
   }
+  return s;
 }
 
-play('Do nothing', 'ORD', []);
-play('ORD domestic narrowbodies', 'ORD', [['DEN', 'a320', 2], ['BOS', 'a220', 1], ['MIA', 'a320', 1]]);
-play('ORD regional jets', 'ORD', [['DEN', 'e175', 1], ['BOS', 'e175', 1], ['ATL', 'e175', 1], ['SEA', 'e175', 1]]);
-play('JFK transatlantic', 'JFK', [['LHR', 'b789', 1], ['CDG', 'b789', 1]]);
-play('DXB long haul', 'DXB', [['LHR', 'b789', 1], ['SIN', 'a359', 1], ['DEL', 'a321xlr', 1]]);
-play('Overexpansion ORD', 'ORD', [['DEN', 'a320', 4], ['LAX', 'b77w', 2], ['LHR', 'b77w', 2]]);
+play('Idle (no flying)', { hub: 'ORD', routes: [], types: {} });
+play('ORD regional (6 E175)', { hub: 'ORD', routes: ['BOS', 'DEN', 'ATL', 'MSP', 'DTW', 'PHL', 'BNA', 'AUS'], types: { e175: 6 } });
+play('ORD narrowbody (6 A320/737)', { hub: 'ORD', routes: ['BOS', 'DEN', 'ATL', 'LAX', 'SFO', 'MIA', 'SEA', 'PHX'], types: { a320n: 3, b38m: 3 } });
+play('ORD mixed hub (10)', { hub: 'ORD', routes: ['BOS', 'DEN', 'ATL', 'LAX', 'SFO', 'MIA', 'SEA', 'LHR', 'BZN', 'MSP', 'PHL', 'AUS'], types: { a320n: 3, b38m: 3, e175: 2, b789: 2 } });
+play('JFK transatlantic (4 787)', { hub: 'JFK', routes: ['LHR', 'CDG', 'FRA', 'MAD'], types: { b789: 4 } });
+play('LHR European (6 A320)', { hub: 'LHR', routes: ['CDG', 'FRA', 'MAD', 'FCO', 'AMS', 'DUB', 'BCN', 'ZRH'], types: { a320n: 6 } });
+play('DXB connector (6)', { hub: 'DXB', routes: ['LHR', 'BOM', 'DEL', 'SIN', 'JNB', 'BKK'], types: { b789: 3, a321n: 3 } });
+play('Overexpansion (20 widebodies)', { hub: 'ORD', routes: ['LHR', 'CDG', 'HND', 'FRA', 'LAX', 'DEN'], types: { b77w: 10, a359: 10 } });

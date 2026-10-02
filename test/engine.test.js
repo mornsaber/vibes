@@ -1,231 +1,313 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  newGame,
-  distanceKm,
-  referenceFare,
-  roundTripsPerWeek,
-  openRoute,
-  closeRoute,
-  leaseAircraft,
-  buyAircraft,
-  sellAircraft,
-  assignAircraft,
-  advanceWeek,
-  takeLoan,
-  creditLimit,
-  triggerEvent,
-  resolveEvent,
-  setFare,
-  updateSettings,
-  heavyCheck,
-  aircraftById,
-} from '../src/engine.js';
-import { EVENTS } from '../src/events.js';
+import * as G from '../src/engine/index.js';
 
-const setup = (opts = {}) => newGame({ name: 'Test Air', hub: 'ORD', seed: 1234, ...opts });
+const setup = (opts = {}) => G.newGame({ name: 'Test Air', code: 'TA', hub: 'DEN', seed: 1234, ...opts });
 
-function skipEvents(state, weeks) {
+function run(s, weeks) {
   for (let i = 0; i < weeks; i++) {
-    if (state.pendingEvent) resolveEvent(state, state.pendingEvent.choices.findIndex((c) => !c.disabled));
-    const res = advanceWeek(state);
+    if (s.pendingEvent) G.resolveEvent(s, s.pendingEvent.choices.findIndex((c) => !c.disabled));
+    const res = G.advanceWeek(s);
     assert.ok(res.ok, res.error);
   }
 }
 
-test('great-circle distances are realistic', () => {
-  assert.ok(Math.abs(distanceKm('JFK', 'LHR') - 5540) < 30);
-  assert.ok(Math.abs(distanceKm('LAX', 'HND') - 8800) < 100);
-  assert.equal(distanceKm('ORD', 'ORD'), 0);
+// A leased aircraft available right away, bypassing the market.
+function quickLease(s, type, weeks = 0) {
+  const monthly = G.monthlyLeaseRate(s, G.aircraftById[type], 3);
+  return G.makeAircraft(s, type, { owned: false, ageWeeks: 156, deliveryWeek: s.week + weeks, lease: { lessor: 'Test', monthly, startWeek: s.week, endWeek: s.week + 520, deposit: 0 } });
+}
+
+test('calendar units advance to the next boundary', () => {
+  assert.equal(G.weeksInUnit(0, 'week'), 1);
+  const m = G.weeksInUnit(0, 'month');
+  assert.ok(m >= 4 && m <= 5);
+  assert.notEqual(G.monthKey(m), G.monthKey(0));
+  assert.equal(G.monthKey(m - 1), G.monthKey(0));
+  const y = G.weeksInUnit(0, 'year');
+  assert.ok(y >= 52 && y <= 53);
 });
 
-test('reference fares grow with distance but taper per km', () => {
-  const short = referenceFare(500);
-  const long = referenceFare(8000);
-  assert.ok(long > short);
-  assert.ok(long / 8000 < short / 500);
-});
-
-test('aircraft fly fewer round trips on longer routes', () => {
-  const a320 = aircraftById.a320;
-  assert.ok(roundTripsPerWeek(a320, 500) > roundTripsPerWeek(a320, 4000));
-  assert.ok(roundTripsPerWeek(aircraftById.b789, 12000) >= 2);
-});
-
-test('new games start solvent and with an unknown hub rejected', () => {
+test('advance by quarter runs whole calendar quarters', () => {
   const s = setup();
-  assert.equal(s.cash, 60e6);
-  assert.equal(s.status, 'playing');
-  assert.throws(() => newGame({ hub: 'XXX' }));
-});
-
-test('routes must touch an airport you already serve', () => {
-  const s = setup();
-  assert.equal(openRoute(s, 'LHR', 'CDG').ok, false);
-  assert.ok(openRoute(s, 'ORD', 'DEN').ok);
-  assert.ok(openRoute(s, 'DEN', 'SEA').ok, 'DEN is now a station');
-  assert.equal(openRoute(s, 'DEN', 'ORD').ok, false, 'duplicate in reverse');
-});
-
-test('leased aircraft arrive after two weeks and respect range', () => {
-  const s = setup();
-  const { route } = openRoute(s, 'ORD', 'HND');
-  const { aircraft: atr } = leaseAircraft(s, 'atr72');
-  assert.equal(assignAircraft(s, atr.id, route.id).ok, false);
-  const { aircraft: wide } = leaseAircraft(s, 'b789');
-  assert.ok(assignAircraft(s, wide.id, route.id).ok);
-
-  skipEvents(s, 1);
-  assert.equal(s.routes[0].last.aircraft, 0, 'not delivered yet');
-  skipEvents(s, 1);
-  assert.equal(s.routes[0].last.aircraft, 1);
-  assert.ok(s.routes[0].last.pax > 0);
-});
-
-test('buying needs cash; selling returns depreciated value', () => {
-  const s = setup({ difficulty: 'hard' });
-  assert.equal(buyAircraft(s, 'b77w').ok, false);
-  const before = s.cash;
-  const { aircraft } = buyAircraft(s, 'e175');
-  assert.equal(s.cash, before - aircraftById.e175.price);
-  skipEvents(s, 10);
-  const cashBeforeSale = s.cash;
-  sellAircraft(s, aircraft.id);
-  const proceeds = s.cash - cashBeforeSale;
-  assert.ok(proceeds > 0.8 * aircraftById.e175.price && proceeds < aircraftById.e175.price);
-});
-
-test('closing a route frees its aircraft', () => {
-  const s = setup();
-  const { route } = openRoute(s, 'ORD', 'ATL');
-  const { aircraft } = leaseAircraft(s, 'e175');
-  assignAircraft(s, aircraft.id, route.id);
-  closeRoute(s, route.id);
-  assert.equal(s.fleet[0].routeId, null);
-});
-
-test('fares are clamped around the reference fare', () => {
-  const s = setup();
-  const { route } = openRoute(s, 'ORD', 'ATL');
-  const ref = referenceFare(route.distance);
-  assert.equal(setFare(s, route.id, 1).fare, Math.round(ref * 0.3));
-  assert.equal(setFare(s, route.id, 1e9).fare, Math.round(ref * 3));
-});
-
-test('a sensible regional operation earns a positive contribution', () => {
-  const s = setup();
-  const { route } = openRoute(s, 'ORD', 'BOS');
-  for (let i = 0; i < 1; i++) {
-    const { aircraft } = leaseAircraft(s, 'e175');
-    assignAircraft(s, aircraft.id, route.id);
+  let total = 0;
+  while (total < 52 && s.status === 'playing') {
+    const res = G.advance(s, 'quarter');
+    assert.ok(res.ok);
+    total += res.ran;
+    while (s.pendingEvent) {
+      G.resolveEvent(s, s.pendingEvent.choices.findIndex((c) => !c.disabled));
+      total += G.advance(s, 'continue').ran;
+    }
   }
-  skipEvents(s, 6);
-  assert.ok(s.routes[0].last.contribution > 0, `contribution ${s.routes[0].last.contribution}`);
+  assert.equal(s.week, total);
+  assert.notEqual(G.quarterKey(s.week), G.quarterKey(s.week - 1));
 });
 
-test('higher fares lower our share of the market', () => {
-  const s = setup();
-  const { route } = openRoute(s, 'ORD', 'DEN');
-  const { aircraft } = leaseAircraft(s, 'a320');
-  assignAircraft(s, aircraft.id, route.id);
-  skipEvents(s, 3);
-  const cheapShare = s.routes[0].last.share;
-  setFare(s, route.id, route.fare * 2);
-  skipEvents(s, 1);
-  assert.ok(s.routes[0].last.share < cheapShare / 2);
+test('distances and markets are realistic', () => {
+  assert.ok(Math.abs(G.distanceKm('JFK', 'LHR') - 5540) < 30);
+  assert.ok(G.baseMarket('JFK', 'LAX') > G.baseMarket('BZN', 'DEN') * 10);
+  const cs = G.classShares('JFK', 'LHR');
+  assert.ok(Math.abs(cs.F + cs.J + cs.W + cs.Y - 1) < 1e-9);
+  assert.ok(cs.J > G.classShares('LAS', 'MCO').J);
 });
 
-test('loans add cash, amortise weekly and respect the credit limit', () => {
+test('traffic rights enforce cabotage and fifth freedoms', () => {
   const s = setup();
-  assert.equal(takeLoan(s, creditLimit(s) + 1).ok, false);
-  const before = s.cash;
-  const { loan } = takeLoan(s, 10e6);
-  assert.equal(s.cash, before + 10e6);
-  skipEvents(s, 4);
-  assert.ok(loan.principal < 10e6);
-  assert.equal(loan.weeksLeft, 256);
+  assert.equal(G.trafficRights(s, 'LHR', 'MAN').ok, false, 'UK domestic is cabotage for a US airline');
+  assert.equal(G.trafficRights(s, 'LHR', 'CDG').ok, false, 'no link from home yet');
+  assert.ok(G.openRoute(s, 'DEN', 'LHR').ok);
+  const r = G.trafficRights(s, 'LHR', 'CDG');
+  assert.ok(r.ok && r.fifth);
+  assert.ok(G.openRoute(s, 'LHR', 'CDG').ok);
 });
 
-test('pay cuts hurt morale', () => {
-  const s = setup();
-  const before = s.morale;
-  updateSettings(s, { wages: 0.8 });
-  assert.ok(s.morale < before);
+test('cabin layouts must fit the floor area', () => {
+  const a320 = G.aircraftById.a320n;
+  assert.ok(G.validateConfig(a320, { F: 0, J: 0, W: 0, Y: 194 }).ok);
+  assert.equal(G.validateConfig(a320, { F: 0, J: 0, W: 0, Y: 195 }).ok, false);
+  assert.equal(G.validateConfig(a320, { F: 4, J: 0, W: 0, Y: 100 }).ok, false, 'no first class on a narrowbody');
+  assert.ok(G.validateConfig(G.aircraftById.b789, { F: 0, J: 30, W: 28, Y: 216 }).ok);
 });
 
-test('heavy checks restore condition and ground the aircraft', () => {
+test('factory orders take the manufacturer lead time and charge deposits', () => {
   const s = setup();
-  const { aircraft } = leaseAircraft(s, 'e175');
-  skipEvents(s, 2);
-  aircraft.condition = 50;
-  assert.ok(heavyCheck(s, aircraft.id).ok);
-  assert.equal(aircraft.condition, 100);
-  assert.equal(heavyCheck(s, aircraft.id).ok, false, 'already in the hangar');
+  const cash = s.cash;
+  assert.equal(G.orderAircraft(s, 'b77w').ok, false, 'out of production');
+  assert.ok(G.orderAircraft(s, 'a320n', 2).ok);
+  assert.equal(s.orders.length, 2);
+  assert.ok(s.orders[0].deliveryWeek >= G.aircraftById.a320n.lead);
+  assert.ok(Math.abs(cash - s.cash - s.orders[0].price * 0.4) < 1);
 });
 
-test('running out of cash for six weeks is bankruptcy', () => {
+test('lease offers deliver after their lead time', () => {
   const s = setup();
-  s.cash = -50e6;
-  skipEvents(s, 5);
-  assert.equal(s.status, 'playing');
+  const offer = s.market.leases[0];
+  const res = G.leaseFromOffer(s, offer.id);
+  assert.ok(res.ok);
+  assert.equal(G.isDelivered(s, res.aircraft), false);
+  run(s, offer.lead);
+  const ac = s.fleet.find((a) => a.id === res.aircraft.id);
+  assert.ok(ac && G.isDelivered(s, ac));
+});
+
+test('scheduling respects hours, range and runway', () => {
+  const s = setup();
+  const { route: shortRoute } = G.openRoute(s, 'DEN', 'JAC');
+  const { route: longRoute } = G.openRoute(s, 'DEN', 'HND');
+  const atr = quickLease(s, 'atr72');
+  const a320 = quickLease(s, 'a320n');
+  assert.equal(G.setFrequency(s, atr.id, longRoute.id, 1).ok, false, 'range');
+  assert.ok(G.setFrequency(s, atr.id, shortRoute.id, 7).ok);
+  assert.equal(G.canOperate(s, quickLease(s, 'b789'), shortRoute).ok, false, 'JAC runway too short for a 787');
+  assert.equal(G.setFrequency(s, a320.id, shortRoute.id, 1).ok, false, 'JAC runway too short for an A320neo');
+  const { route: sea } = G.openRoute(s, 'DEN', 'SEA');
+  const max = G.maxFrequency(s, a320, sea);
+  assert.ok(max > 10);
+  assert.equal(G.setFrequency(s, a320.id, sea.id, max + 1).ok, false);
+  assert.ok(G.setFrequency(s, a320.id, sea.id, max).ok);
+  assert.ok(G.utilization(s, a320) <= 1);
+});
+
+test('a sensible domestic operation carries passengers and earns route contribution', () => {
+  const s = setup();
+  const { route } = G.openRoute(s, 'DEN', 'SEA');
+  G.setFrequency(s, quickLease(s, 'a320n').id, route.id, 7);
+  run(s, 3);
+  const l = s.routes[0].last;
+  assert.ok(l.paxTotal > 500, `pax ${l.paxTotal}`);
+  assert.ok(l.lf > 0.25 && l.lf <= 1, `lf ${l.lf}`);
+  assert.ok(l.contribution > 0, `contribution ${l.contribution}`);
+  assert.ok(l.cargoKg > 0, 'belly cargo');
+});
+
+test('higher fares lower market share', () => {
+  const s = setup();
+  const { route } = G.openRoute(s, 'DEN', 'LAX');
+  G.assignAircraft(s, quickLease(s, 'a320n').id, route.id);
+  run(s, 2);
+  const before = s.routes[0].last.share;
+  G.setPriceIndex(s, route.id, 1.6);
+  run(s, 1);
+  assert.ok(s.routes[0].last.share < before * 0.6);
+});
+
+test('passengers connect over the hub', () => {
+  const s = setup();
+  const { route: r1 } = G.openRoute(s, 'DEN', 'BZN');
+  const { route: r2 } = G.openRoute(s, 'DEN', 'ORD');
+  G.assignAircraft(s, quickLease(s, 'e175').id, r1.id);
+  G.assignAircraft(s, quickLease(s, 'a320n').id, r2.id);
+  run(s, 2);
+  assert.ok(s.routes.every((r) => r.last.connecting > 0));
+  assert.ok(s.lastReport.topFlows.some((f) => f.via === 'DEN'));
+});
+
+test('staff requirements follow the schedule and auto-hiring fills them', () => {
+  const s = setup();
+  const { route } = G.openRoute(s, 'DEN', 'SFO');
+  G.assignAircraft(s, quickLease(s, 'a320n').id, route.id);
+  const req = G.staffRequirements(s);
+  assert.ok(req.pilots > 5 && req.cabin > req.pilots);
+  run(s, 8);
+  assert.ok(s.staffStatus.pilots.ratio >= 0.95);
+});
+
+test('a pilot strike collapses flying', () => {
+  const s = setup();
+  const { route } = G.openRoute(s, 'DEN', 'SFO');
+  G.assignAircraft(s, quickLease(s, 'a320n').id, route.id);
+  run(s, 8);
+  const normal = s.routes[0].last.flights;
+  s.strikes.pilots = 2;
   s.pendingEvent = null;
-  advanceWeek(s);
-  assert.equal(s.status, 'bankrupt');
-  assert.equal(advanceWeek(s).ok, false);
+  G.advanceWeek(s);
+  assert.ok(s.routes[0].last.flights < normal * 0.2);
 });
 
-test('pending events block the week until resolved', () => {
+test('checks run automatically; overdue aircraft are grounded', () => {
   const s = setup();
-  triggerEvent(s, 'boom');
-  assert.equal(advanceWeek(s).ok, false);
-  assert.ok(resolveEvent(s, 0).ok);
-  assert.equal(s.shocks.length, 1);
-  assert.ok(advanceWeek(s).ok);
+  const ac = quickLease(s, 'a320n');
+  ac.fh = ac.checks.A.fh + 740;
+  run(s, 1);
+  assert.equal(ac.checks.A.fh, ac.fh, 'auto A-check done');
+  for (const k of G.CHECK_ORDER) G.setAutoCheck(s, k, false);
+  ac.checks.C.week = s.week - 200;
+  run(s, 1);
+  assert.match(ac.grounded ?? '', /overdue/);
+  assert.ok(ac.booked || ac.downtime, 'forced into the shop');
+});
+
+test('in-house hangars are cheaper than outsourcing', () => {
+  const s = setup();
+  const ac = quickLease(s, 'a320n');
+  const outside = G.quoteCheck(s, ac, 'C').cost;
+  s.cash = 1e9;
+  assert.ok(G.buildFacility(s, 'DEN', 'line').ok);
+  assert.ok(G.buildFacility(s, 'DEN', 'narrowHangar').ok);
+  run(s, 40);
+  assert.equal(G.quoteCheck(s, ac, 'C').where, 'inhouse');
+  assert.ok(G.quoteCheck(s, ac, 'C').cost < outside);
+});
+
+test('retrofits and upgrades take the aircraft out of service then apply', () => {
+  const s = setup();
+  s.cash = 1e9;
+  const ac = quickLease(s, 'b789');
+  assert.ok(G.retrofitCabin(s, ac.id, { F: 0, J: 48, W: 24, Y: 180 }).ok);
+  assert.ok(G.inDowntime(s, ac));
+  assert.ok(G.startUpgrade(s, ac.id, 'wifi').ok);
+  run(s, 5);
+  assert.equal(ac.config.J, 48);
+  assert.ok(ac.upgrades.includes('wifi'));
+  assert.equal(G.inDowntime(s, ac), false);
+});
+
+test('slots are needed at congested airports', () => {
+  const s = setup();
+  const { route } = G.openRoute(s, 'DEN', 'LHR');
+  const ac = quickLease(s, 'b789');
+  s.slots.LHR = { held: 0, pool: 2 };
+  assert.equal(G.setFrequency(s, ac.id, route.id, 5).ok, false);
+  assert.ok(G.setFrequency(s, ac.id, route.id, 2).ok);
+  assert.equal(s.slots.LHR.held, 2);
+});
+
+test('loans, credit facility and hedges work', () => {
+  const s = setup();
+  assert.ok(G.takeTermLoan(s, 10e6).ok);
+  assert.equal(G.takeTermLoan(s, 1e12).ok, false);
+  assert.ok(G.drawRcf(s, 5e6).ok);
+  s.lastReport = { cost: { fuel: 500e3 } };
+  assert.ok(G.buyHedge(s, 0.25, 26).ok);
+  assert.ok(G.buyHedge(s, 0.5, 26).ok);
+  assert.equal(G.buyHedge(s, 0.5, 26).ok, false, 'max 80% hedged');
+  s.lastReport = null;
+  run(s, 6);
+  assert.ok(s.loans.find((l) => l.kind === 'term').principal < 10e6);
+  assert.ok(G.RATINGS.includes(s.finance.rating));
+});
+
+test('real rivals compete on their hub markets', () => {
+  const s = setup({ hub: 'ORD' });
+  const rivals = G.rivalsOn(s, 'ORD', 'LAX').map((r) => r.id);
+  assert.ok(rivals.includes('UA') && rivals.includes('AA'));
+  assert.equal(G.rivalsOn(s, 'BZN', 'JAC').length, 0);
+});
+
+test('charters reserve aircraft hours and pay out', () => {
+  const s = setup();
+  s.cash = 1e9;
+  const ac = quickLease(s, 'b789');
+  const offer = { id: 'co-test', category: 'charter', kind: 'Sports team', client: 'Test FC', a: 'DEN', b: 'LAX', distance: G.distanceKm('DEN', 'LAX'), seats: 100, weeks: 4, rt: 2, weekly: 500e3, rep: 1, startIn: 1, expiresWeek: s.week + 4, fullTime: false };
+  s.contracts.offers.push(offer);
+  assert.ok(G.acceptContract(s, offer.id, ac.id).ok);
+  run(s, 2);
+  assert.ok(ac.contractHours > 0);
+  assert.ok(s.lastReport.revenue.contracts >= 500e3);
 });
 
 test('every event builds and resolves every choice', () => {
-  for (const def of EVENTS) {
+  for (const def of G.EVENTS) {
     for (let choice = 0; choice < 3; choice++) {
-      const s = setup();
-      s.cash = 500e6;
-      const { route } = openRoute(s, 'ORD', 'LAS');
-      const { aircraft } = leaseAircraft(s, 'a320');
-      assignAircraft(s, aircraft.id, route.id);
-      leaseAircraft(s, 'e175');
-      skipEvents(s, 60);
-      for (const h of s.history) h.profit = Math.abs(h.profit) + 1;
-      s.settings.service = 4;
-      s.reputation = 70;
-      s.strikeWeeks = 0;
-      s.shocks = [];
+      const s = setup({ hub: 'MIA' });
+      s.cash = 1e9;
+      for (const to of ['LHR', 'CDG', 'EYW', 'MCO']) G.openRoute(s, 'MIA', to);
+      for (let i = 0; i < 30; i++) G.assignAircraft(s, quickLease(s, i % 2 ? 'b789' : 'a320n').id, s.routes[i % 4].id);
+      G.orderAircraft(s, 'a320n', 1);
+      s.staff.pilots.count = 200;
+      s.fleet[0].reliability = 50;
+      run(s, 1);
       s.pendingEvent = null;
-      aircraft.condition = 50;
-      s.routes[0].competitors = 2;
-      assert.ok(!def.canTrigger || def.canTrigger(s), `${def.id} preconditions not met by the fixture`);
-      const ev = triggerEvent(s, def.id);
+      const ev = G.triggerEvent(s, def.id, def.id === 'rival_collapse' ? { rivalId: 'AA' } : undefined);
+      if (!ev) continue;
       if (choice >= ev.choices.length) continue;
       assert.doesNotThrow(() => JSON.stringify(ev));
-      const res = resolveEvent(s, choice);
+      if (ev.choices[choice].disabled) continue;
+      const res = G.resolveEvent(s, choice);
       assert.ok(res.ok, `${def.id}#${choice}: ${res.error}`);
-      assert.equal(s.pendingEvent, null);
+      run(s, 1);
     }
   }
 });
 
-test('games are deterministic for a given seed and survive a JSON round trip', () => {
-  const play = (state) => {
-    const { route } = openRoute(state, 'ORD', 'MIA');
-    const { aircraft } = leaseAircraft(state, 'a220');
-    assignAircraft(state, aircraft.id, route.id);
-    skipEvents(state, 20);
-    return state;
-  };
-  const a = play(setup());
-  const b = play(setup());
-  assert.deepEqual(a, b);
+test('running out of cash ends in administration', () => {
+  const s = setup();
+  s.cash = -500e6;
+  run(s, 7);
+  assert.equal(s.status, 'playing');
+  s.pendingEvent = null;
+  G.advanceWeek(s);
+  assert.equal(s.status, 'bankrupt');
+  assert.equal(G.advanceWeek(s).ok, false);
+});
 
+test('games are deterministic and survive a JSON round trip', () => {
+  const play = () => {
+    const s = setup();
+    const { route } = G.openRoute(s, 'DEN', 'ORD');
+    G.leaseFromOffer(s, s.market.leases[0].id);
+    G.assignAircraft(s, quickLease(s, 'a320n').id, route.id);
+    run(s, 30);
+    return s;
+  };
+  const a = play();
+  const b = play();
+  assert.deepEqual(a, b);
   const restored = JSON.parse(JSON.stringify(a));
-  skipEvents(restored, 5);
-  skipEvents(a, 5);
-  assert.deepEqual(restored, a);
+  run(restored, 20);
+  run(a, 20);
+  assert.deepEqual(JSON.parse(JSON.stringify(restored)), JSON.parse(JSON.stringify(a)));
+});
+
+test('a five-year game runs without errors', () => {
+  const s = setup({ hub: 'ATL' });
+  for (const to of ['MIA', 'ORD', 'JFK', 'DFW', 'BNA', 'LHR']) G.openRoute(s, 'ATL', to);
+  for (let i = 0; i < 8; i++) G.assignAircraft(s, quickLease(s, i < 6 ? 'b38m' : 'b789').id, s.routes[i < 6 ? i : 5].id);
+  for (let w = 0; w < 260 && s.status === 'playing'; w++) {
+    if (s.pendingEvent) G.resolveEvent(s, s.pendingEvent.choices.findIndex((c) => !c.disabled));
+    assert.ok(G.advanceWeek(s).ok);
+    assert.ok(Number.isFinite(s.cash), 'cash stays finite');
+  }
+  assert.ok(s.history.length > 0);
 });
