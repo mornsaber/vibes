@@ -1,4 +1,4 @@
-import { G, esc, money, pct, int, num, kpi, panel, table, statement, airportOptions, options, pill, ap, apName, typeName, signed, lineChart, sparkline, tonnes } from '../util.js';
+import { G, esc, money, pct, int, num, kpi, panel, table, statement, airportOptions, options, pill, ap, apName, typeName, signed, lineChart, sparkline, tonnes, usd, nominal, fromNominal } from '../util.js';
 import { formValues } from '../app.js';
 
 const CLASS_NAMES = { F: 'First', J: 'Business', W: 'Premium Eco', Y: 'Economy' };
@@ -44,8 +44,8 @@ export function routePreview(s, a, b) {
       ['Market (all airlines, both ways)', `~${int(market)} pax/wk`],
       ['Cargo market', `~${int(G.cargoNow(s, a, b) * 2)} t/wk`],
       ['Cabin demand', `F ${pct(shares.F, 1)} · J ${pct(shares.J, 1)} · W ${pct(shares.W)} · Y ${pct(shares.Y)}`],
-      ['Economy reference fare', `$${G.fareNow(s, d, 'Y')}`],
-      ['Business reference fare', `$${G.fareNow(s, d, 'J')}`],
+      ['Economy reference fare', usd(G.fareNow(s, d, 'Y'))],
+      ['Business reference fare', usd(G.fareNow(s, d, 'J'))],
       ['Traffic rights', rights.ok ? (rights.fifth ? '<span class="warn">Fifth freedom permit</span>' : 'Granted') : `<span class="bad">${esc(rights.reason)}</span>`],
       ['Launch cost', rights.ok ? money(cost) : '–'],
     ])}
@@ -123,8 +123,8 @@ function detail(c, route) {
       { h: 'Demand', cls: 'num', v: (k) => int(l?.demand?.[k] ?? 0) },
       { h: 'Pax', cls: 'num', v: (k) => int(l?.pax?.[k] ?? 0) },
       { h: 'Load', cls: 'num', v: (k) => (l?.seats?.[k] ? pct(l.pax[k] / l.seats[k]) : '–') },
-      { h: 'Fare', v: (k) => `<input type="number" name="fare_${k}" value="${route.fares[k]}" min="1" step="5" class="w-90">` },
-      { h: 'Ref', cls: 'num muted', v: (k) => `$${G.fareNow(s, route.distance, k)}` },
+      { h: 'Fare', v: (k) => `<input type="number" name="fare_${k}" value="${nominal(route.fares[k])}" min="1" step="5" class="w-90">` },
+      { h: 'Ref', cls: 'num muted', v: (k) => usd(G.fareNow(s, route.distance, k)) },
     ])}
     <div class="row wrap">
       <button class="primary small" data-action="save-fares" data-id="${route.id}">Save fares</button>
@@ -174,7 +174,7 @@ function detail(c, route) {
       ['Capacity / wk', tonnes(l?.cargoCap ?? planned.C * 2)],
       ['Carried / wk', tonnes(l?.cargoKg ?? 0)],
       ['Cargo load', l?.cargoCap ? pct(l.cargoLf) : '–'],
-      ['Market rate', `$${G.refCargoRate(route.distance).toFixed(2)}/kg`],
+      ['Market rate', `${usd(G.refCargoRate(route.distance), 2)}/kg`],
     ])}<div class="row" data-form><label class="small">Rate index</label><input type="number" name="idx" value="${route.cargoIdx}" min="0.5" max="2" step="0.05" class="w-70"><button class="small" data-action="cargo-rate" data-id="${route.id}">Set</button></div>`)}
   </div>
   ${panel('Last 26 weeks', `${lineChart([{ values: (route.hist ?? []).map((h) => h.profit), cls: 'profit' }])}<div class="legend"><span><i class="sw profit"></i>Weekly route profit</span></div>`)}`;
@@ -200,7 +200,7 @@ export const actions = {
   },
   'save-fares'(el, ctx) {
     const v = formValues(el);
-    for (const k of G.CLASSES) if (v[`fare_${k}`] != null) G.setFare(ctx.game, el.dataset.id, k, v[`fare_${k}`]);
+    for (const k of G.CLASSES) if (v[`fare_${k}`] != null) G.setFare(ctx.game, el.dataset.id, k, fromNominal(v[`fare_${k}`]));
     return { ok: true, message: 'Fares updated.' };
   },
   'price-index': (el, ctx) => G.setPriceIndex(ctx.game, el.dataset.id, Number(el.dataset.x)),

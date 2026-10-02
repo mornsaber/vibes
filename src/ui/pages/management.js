@@ -1,6 +1,7 @@
-import { G, esc, money, pct, int, num, kpi, panel, table, tabs, statement, options, bar, pill, ap, tonnes } from '../util.js';
+import { G, esc, money, pct, int, num, kpi, panel, table, tabs, statement, options, bar, pill, ap, tonnes, usd, nominal, fromNominal } from '../util.js';
 import { formValues } from '../app.js';
 import { hubsPanel } from './planning.js';
+import { settingsEditor, parseSetting } from './start.js';
 import { render as cargoRender } from './cargo.js';
 
 const TABS = [['airline', 'Airline'], ['subsidies', 'Subsidies'], ['stats', 'Statistics'], ['hubs', 'Hubs'], ['service', 'Service standards'], ['codeshare', 'Codeshare & alliances'], ['staffing', 'Staffing'], ['cargo', 'Cargo']];
@@ -22,6 +23,7 @@ function airline(c) {
       <div class="field"><label>Slogan</label><input name="slogan" value="${esc(a.slogan)}" maxlength="60" placeholder="e.g. The friendly skies"></div>
       <button class="primary" data-action="save-airline">Save</button>
     </div>`)}
+    ${panel('Game settings', `${settingsEditor(s.settings, 'game-setting', { inGame: true })}<p class="muted small">Preset at founding: ${esc(G.PRESETS[s.settings.preset]?.label ?? 'Custom')}. Changes apply from next week. Prices are ${num(s.macro.priceLevel ?? 1, 2)}× 2027 levels; inflation is running at ${pct(s.macro.inflation ?? 0, 1)} a year.</p>`)}
     ${panel('Board of directors', `${statement([
       ['Confidence', `${bar(s.board.confidence, 100)} ${Math.round(s.board.confidence)}/100`],
       ['Quarterly reviews held', s.board.reviews],
@@ -91,7 +93,7 @@ function stats(c) {
       ['CASK', ask ? `${num((cost / ask) * 100, 2)}¢` : '–'],
       ['CASK ex-fuel', ask ? `${num(((cost - (s.lastReport?.cost.fuel ?? 0)) / ask) * 100, 2)}¢` : '–'],
       ['Passenger yield', rpk ? `${num(((s.lastReport?.revenue.passenger ?? 0) / rpk) * 100, 2)}¢/km` : '–'],
-      ['Average fare', s.lastReport?.pax ? `$${int((s.lastReport.revenue.passenger) / s.lastReport.pax)}` : '–'],
+      ['Average fare', s.lastReport?.pax ? usd(s.lastReport.revenue.passenger / s.lastReport.pax) : '–'],
       ['On-time performance (12 mo)', yr.some((h) => h.flights) ? pct(sum((h) => h.otp * h.flights) / Math.max(1, sum((h) => h.flights))) : '–'],
     ]))}
     ${panel('Organisation', statement([
@@ -120,7 +122,7 @@ function service(c) {
       const d = G.SERVICE[k];
       return `<div class="field svc"><label><b>${esc(d.name)}</b> <small class="muted">${esc(d.desc)}</small></label>
         <div class="row">${[1, 2, 3, 4, 5].map((lv) => `<button class="small ${s.service[k] === lv ? 'primary' : ''}" data-action="set-service" data-k="${k}" data-lv="${lv}">${lv}</button>`).join('')}
-        <small class="muted">appeal ×${d.appeal[s.service[k] - 1]} · ${d.cost[s.service[k] - 1] ? `$${d.cost[s.service[k] - 1]}${d.perPax ? '/pax' : '/pax-hour'}` : 'no cost'}${d.ancillary ? ` · ancillary ${pct(d.ancillary[s.service[k] - 1])} of eco revenue` : ''}</small></div></div>`;
+        <small class="muted">appeal ×${d.appeal[s.service[k] - 1]} · ${d.cost[s.service[k] - 1] ? `${usd(d.cost[s.service[k] - 1], 2)}${d.perPax ? '/pax' : '/pax-hour'}` : 'no cost'}${d.ancillary ? ` · ancillary ${pct(d.ancillary[s.service[k] - 1])} of eco revenue` : ''}</small></div></div>`;
     }).join('')}`)}
     ${panel('Marketing & brand', `${statement([
       ['Weekly marketing budget', money(s.marketing)],
@@ -128,7 +130,7 @@ function service(c) {
       ['Product appeal (long-haul)', `×${num(G.serviceAppeal(s, true), 3)}`],
       ['Product appeal (short-haul)', `×${num(G.serviceAppeal(s, false), 3)}`],
       ['Reputation', int(s.reputation)],
-    ])}<div class="row" data-form><input type="number" name="marketing" value="${s.marketing}" step="25000" min="0" class="w-140"><button data-action="set-marketing">Set budget</button></div>
+    ])}<div class="row" data-form><input type="number" name="marketing" value="${nominal(s.marketing)}" step="5000" min="0" class="w-140"><button data-action="set-marketing">Set budget</button></div>
     <p class="muted small">Marketing has diminishing returns that scale with network size. Reputation drifts toward a target set by service, punctuality, product, morale and marketing.</p>`)}
   </div>`;
 }
@@ -264,7 +266,7 @@ export const actions = {
     ctx.game.service[el.dataset.k] = Number(el.dataset.lv);
   },
   'set-marketing'(el, ctx) {
-    ctx.game.marketing = Math.max(0, Math.min(10e6, Math.round(Number(formValues(el).marketing) || 0)));
+    ctx.game.marketing = Math.max(0, Math.min(10e6, Math.round(fromNominal(formValues(el).marketing) || 0)));
   },
   'propose-codeshare': (el, ctx) => G.proposeCodeshare(ctx.game, el.dataset.id),
   'end-codeshare': (el, ctx) => (confirm('End this codeshare?') ? G.endCodeshare(ctx.game, el.dataset.id) : null),
@@ -282,6 +284,13 @@ export const actions = {
 };
 
 export const changes = {
+  'game-setting': (el, ctx) => {
+    ctx.game.settings[el.dataset.key] = parseSetting(el.dataset.key, el.value);
+    if (el.dataset.key === 'inflation' && el.value === 'off') {
+      ctx.game.macro.inflation = 0;
+      ctx.game.macro.priceLevel = 1;
+    }
+  },
   'auto-staff': (el, ctx) => G.setAutoStaff(ctx.game, el.dataset.role, el.checked),
   'auto-promote': (el, ctx) => G.setAutoPromote(ctx.game, el.dataset.role, el.checked),
   delegate: (el, ctx) => G.setDelegated(ctx.game, el.dataset.role, el.checked),

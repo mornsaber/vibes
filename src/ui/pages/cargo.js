@@ -1,4 +1,4 @@
-import { G, esc, money, pct, int, num, kpi, panel, table, tabs, pill, ap, typeName, tonnes, statusPill, bar } from '../util.js';
+import { G, esc, money, pct, int, num, kpi, panel, table, tabs, pill, ap, typeName, tonnes, statusPill, bar, usd, nominal, fromNominal } from '../util.js';
 import { formValues } from '../app.js';
 
 export function render(c, embedded = false) {
@@ -31,7 +31,7 @@ function overview(c) {
     { h: 'Carried', cls: 'num', v: (x) => tonnes(x.last.cargoKg) },
     { h: 'Load', v: (x) => bar(x.last.cargoLf, 1) },
     { h: 'Revenue', cls: 'num', v: (x) => money(x.last.cargoRev) },
-    { h: 'Rate', cls: 'num', v: (x) => `$${(G.refCargoRate(x.distance) * x.cargoIdx).toFixed(2)}/kg` },
+    { h: 'Rate', cls: 'num', v: (x) => `${usd(G.refCargoRate(x.distance) * x.cargoIdx, 2)}/kg` },
   ], { empty: 'No cargo carried yet. Every passenger aircraft carries belly cargo once it flies.' }))}
   <p class="muted small">Planned capacity across the network: ${tonnes(bellyCap)} per week. Integrators (FedEx, UPS, DHL) and widebody passenger airlines compete for freight.</p>`;
 }
@@ -53,7 +53,7 @@ function network(c) {
     { h: 'Market', v: (o) => `<b>${o.a}–${o.b}</b> <small class="muted">${esc(ap(o.b).city)}</small>` },
     { h: 'Km', cls: 'num', v: (o) => int(o.d) },
     { h: 'Freight market', cls: 'num', v: (o) => `${int(o.t)} t/wk` },
-    { h: 'Rate', cls: 'num', v: (o) => `$${G.refCargoRate(o.d).toFixed(2)}/kg` },
+    { h: 'Rate', cls: 'num', v: (o) => `${usd(G.refCargoRate(o.d), 2)}/kg` },
     { h: 'Flown', v: (o) => (s.routes.some((r) => G.pairKey(r.a, r.b) === G.pairKey(o.a, o.b)) ? pill('Yes', 'good') : '') },
   ]))}`;
 }

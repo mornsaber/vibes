@@ -13,7 +13,7 @@ import { rivalDef } from './market.js';
 import { spawnStartup } from './rivals.js';
 import { AIRSPACE } from '../data/history.js';
 import { rivalById, RIVALS, ALLIANCES } from '../data/rivals.js';
-import { clamp, rand, pick, money, log, elapsed, yearOf } from './core.js';
+import { clamp, rand, pick, money, log, elapsed, yearOf, cents } from './core.js';
 import { makeAircraft, typeOf, isDelivered, addWork as addWorkFn } from './fleet.js';
 import { stations } from './network.js';
 import { marketCap } from './finance.js';
@@ -126,7 +126,7 @@ export const EVENTS = [
         for (const r of state.routes) for (const c of Object.keys(r.fares)) r.fares[c] = Math.round(r.fares[c] * 1.06);
         bump(state, 'reputation', -3);
       }
-      return `Jet fuel now $${state.macro.fuel.toFixed(2)}/kg. Hedges soften the blow.`;
+      return `Jet fuel now ${cents(state.macro.fuel)}/kg. Hedges soften the blow.`;
     },
   },
   {
@@ -135,7 +135,7 @@ export const EVENTS = [
     build: () => ({ title: 'Oil glut', text: 'Producers flood the market; jet fuel falls about 25%.', choices: [{ label: 'Excellent', tone: 'good' }] }),
     resolve(state) {
       state.macro.fuel = clamp(state.macro.fuel * 0.75, 0.4, 2.2);
-      return `Jet fuel falls to $${state.macro.fuel.toFixed(2)}/kg (hedged volumes stay at their locked price).`;
+      return `Jet fuel falls to ${cents(state.macro.fuel)}/kg (hedged volumes stay at their locked price).`;
     },
   },
   {
@@ -621,7 +621,7 @@ EVENTS.push(
     resolve(state, _i, d) {
       state.macro.fuel *= 1 + 1.4 * sev(d);
       shock(state, 'Oil crisis recession', 1 - 0.12 * sev(d), 52);
-      return `Fuel now $${state.macro.fuel.toFixed(2)}/kg.`;
+      return `Fuel now ${cents(state.macro.fuel)}/kg.`;
     },
   },
   {
@@ -638,7 +638,7 @@ EVENTS.push(
     resolve(state, _i, d) {
       state.macro.fuel *= 1 + 0.7 * sev(d);
       shock(state, 'Stagflation', 1 - 0.08 * sev(d), 40);
-      return `Fuel now $${state.macro.fuel.toFixed(2)}/kg.`;
+      return `Fuel now ${cents(state.macro.fuel)}/kg.`;
     },
   },
   {
@@ -704,7 +704,7 @@ EVENTS.push(
         for (const r of state.routes) for (const c of Object.keys(r.fares)) r.fares[c] = Math.round(r.fares[c] * 1.08);
         state.reputation = clamp(state.reputation - 3, 0, 100);
       }
-      return `Fuel now $${state.macro.fuel.toFixed(2)}/kg.`;
+      return `Fuel now ${cents(state.macro.fuel)}/kg.`;
     },
   },
   {
@@ -755,7 +755,7 @@ EVENTS.push(
     build: (state) => ({ title: 'Oil workers strike', text: `Oil field and terminal workers in a major producer walk out. Crude supply tightens.`, choices: ack() }),
     resolve(state) {
       state.macro.fuel *= 1.15 + rand(state) * 0.15;
-      return `Fuel climbs to $${state.macro.fuel.toFixed(2)}/kg.`;
+      return `Fuel climbs to ${cents(state.macro.fuel)}/kg.`;
     },
   },
   {

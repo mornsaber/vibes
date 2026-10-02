@@ -103,8 +103,16 @@ export function log(state, text, tone = 'info', category = 'general') {
   if (state.log.length > 400) state.log.length = 400;
 }
 
+// The engine keeps every amount in constant 2027 dollars; money is displayed in
+// the nominal dollars of the current game year using this price level.
+let PRICE_LEVEL = 1;
+export const setPriceLevel = (p) => (PRICE_LEVEL = Number.isFinite(p) && p > 0 ? p : 1);
+export const priceLevel = () => PRICE_LEVEL;
+export const cents = (x) => `$${(x * PRICE_LEVEL).toFixed(2)}`;
+
 export function money(x, digits) {
   if (!Number.isFinite(x)) return '$–';
+  x *= PRICE_LEVEL;
   const sign = x < 0 ? '-' : '';
   const v = Math.abs(x);
   if (v >= 1e9) return `${sign}$${(v / 1e9).toFixed(digits ?? 2)}B`;

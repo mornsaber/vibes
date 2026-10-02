@@ -45,6 +45,17 @@ const ROWS = [
   ['EYW', 'Key West', 'US', 'NA', 24.56, -81.76, 0.08, 0.5, 1.8, 0.1, 0, 0, 1.0, 1524],
   ['MSO', 'Missoula', 'US', 'NA', 46.92, -114.09, 0.12, 0.6, 1.1, 0.2, 0, 0, 0.7, 2896],
   ['FAI', 'Fairbanks', 'US', 'NA', 64.82, -147.86, 0.1, 0.6, 0.9, 0.5, 0, 0, 0.8, 3870],
+  // Short-runway and island airports (commuter and STOL territory)
+  ['ACK', 'Nantucket', 'US', 'NA', 41.25, -70.06, 0.02, 0.9, 1.9, 0.05, 0, 0, 1.1, 1829],
+  ['MVY', "Martha's Vineyard", 'US', 'NA', 41.39, -70.61, 0.02, 0.9, 1.9, 0.05, 0, 0, 1.1, 1676],
+  ['JNU', 'Juneau', 'US', 'NA', 58.36, -134.58, 0.03, 0.8, 1.3, 0.2, 0, 0, 0.9, 2655],
+  ['LCY', 'London City', 'GB', 'EU', 51.5, 0.05, 3, 1.6, 0.6, 0.05, 1, 1, 1.4, 1508],
+  ['KOI', 'Kirkwall (Orkney)', 'GB', 'EU', 58.96, -2.9, 0.02, 0.6, 1.2, 0.05, 0, 0, 0.9, 1400],
+  ['BRR', 'Barra (beach runway)', 'GB', 'EU', 57.02, -7.44, 0.002, 0.3, 1.6, 0.01, 0, 0, 0.9, 800],
+  ['SBH', 'St Barthélemy', 'BL', 'LA', 17.9, -62.84, 0.01, 0.6, 2.0, 0.01, 0, 0, 1.3, 646],
+  ['LUA', 'Lukla (Everest)', 'NP', 'AS', 27.69, 86.73, 0.005, 0.3, 1.8, 0.02, 0, 0, 0.8, 527],
+  ['BME', 'Broome', 'AU', 'OC', -17.95, 122.23, 0.015, 0.6, 1.7, 0.1, 0, 0, 0.9, 2460],
+  ['AYQ', 'Uluru (Ayers Rock)', 'AU', 'OC', -25.19, 130.98, 0.003, 0.4, 1.9, 0.02, 0, 0, 1.0, 2600],
   // Canada
   ['YYZ', 'Toronto', 'CA', 'NA', 43.68, -79.63, 6.7, 1.1, 0.9, 1.1, 3, 1, 1.1, 3389],
   ['YVR', 'Vancouver', 'CA', 'NA', 49.19, -123.18, 2.6, 1.0, 1.2, 1.0, 2, 0, 1.0, 3505],
@@ -192,7 +203,7 @@ export const COUNTRIES = {
   KE: 'Kenya', NG: 'Nigeria', MA: 'Morocco', MU: 'Mauritius', SC: 'Seychelles', IN: 'India',
   LK: 'Sri Lanka', MV: 'Maldives', NP: 'Nepal', SG: 'Singapore', MY: 'Malaysia', TH: 'Thailand',
   ID: 'Indonesia', PH: 'Philippines', VN: 'Vietnam', HK: 'Hong Kong', TW: 'Taiwan', CN: 'China',
-  KR: 'South Korea', JP: 'Japan', AU: 'Australia', NZ: 'New Zealand', FJ: 'Fiji', PF: 'French Polynesia',
+  KR: 'South Korea', JP: 'Japan', AU: 'Australia', NZ: 'New Zealand', FJ: 'Fiji', PF: 'French Polynesia', BL: 'Saint Barthélemy',
 };
 
 export const REGIONS = {

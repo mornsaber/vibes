@@ -14,7 +14,7 @@ import { facilityEngineers } from './maintenance.js';
 const PILOT_HOURS = 15; // productive block hours per pilot per week
 const CABIN_HOURS = 16;
 const RESERVE = 1.12;
-const ENGINEERS_PER_AC = { small: 3, narrow: 4, wide: 7, jumbo: 9 };
+const ENGINEERS_PER_AC = { tiny: 1, small: 3, narrow: 4, wide: 7, jumbo: 9 };
 const RECRUIT_COST = { pilots: 30e3, cabin: 5e3, engineers: 12e3, ground: 2e3, admin: 4e3 };
 const FRONTLINE = [0, 1, 2];
 export const DELEGATION_MIN = 100; // role headcount needed before a department can run itself
@@ -22,7 +22,7 @@ export const DELEGATION_MIN = 100; // role headcount needed before a department 
 export const cockpitCrew = (block) => (block > 12 ? 4 : block > 8 ? 3 : 2);
 export function cabinCrewPerFlight(config) {
   const seats = (config.F || 0) + (config.J || 0) + (config.W || 0) + (config.Y || 0);
-  if (!seats) return 0;
+  if (seats <= 19) return 0; // no flight attendant required under 20 seats
   return Math.max(1, Math.ceil(seats / 50)) + Math.ceil((config.J || 0) / 14) + Math.ceil((config.F || 0) / 4);
 }
 
@@ -99,7 +99,7 @@ function crewHours(state, horizon = 0) {
       if (!r) continue;
       const bh = blockHours(type, r.distance);
       const legHours = s.freq * 2 * bh;
-      pilot += legHours * (cockpitCrew(bh) + (type.fe ? 1 : 0));
+      pilot += legHours * (type.cockpit ?? cockpitCrew(bh) + (type.fe ? 1 : 0));
       cabin += legHours * cabinCrewPerFlight(ac.config);
     }
     if (ac.contractHours) {
@@ -276,7 +276,9 @@ export function actionFactor(state, role) {
 // The raise a union will ask for at the end of its agreement.
 export function unionDemand(state, role) {
   const w = state.staff[role];
-  return Math.round((0.03 + Math.max(0, 60 - w.morale) * 0.001 + w.union.strength * 0.03) * 100) / 100;
+  // Base claim, plus anger, plus union power — and catch-up if inflation has eaten into real pay.
+  const lab = state.settings?.labour ?? 1;
+  return Math.round((0.03 * lab + Math.max(0, 60 - w.morale) * 0.001 + w.union.strength * 0.03 * lab + Math.max(0, 1 - w.pay) + Math.max(0, state.macro.inflation ?? 0) * 3) * 100) / 100;
 }
 
 // Settlement by a delegated manager according to HR policy.
@@ -297,7 +299,7 @@ function settle(state, role) {
   }
   w.pay = Math.round((w.pay + 0.01) * 100) / 100;
   w.morale = clamp(w.morale - 8, 0, 100);
-  if (rand(state) < 0.7 * w.union.strength) startAction(state, role, rand(state) < 0.5 ? 'strike' : 'sickout', 1 + Math.floor(rand(state) * 2), 'after management imposed a 1% deal');
+  if (rand(state) < 0.7 * w.union.strength * (state.settings?.labour ?? 1)) startAction(state, role, rand(state) < 0.5 ? 'strike' : 'sickout', 1 + Math.floor(rand(state) * 2), 'after management imposed a 1% deal');
   return 'imposed a 1% deal';
 }
 
@@ -305,7 +307,7 @@ function unionTick(state, role, monthly) {
   const w = state.staff[role];
   const u = w.union;
   if (!u.recognized) {
-    if (monthly && w.count >= 30 && w.morale < 45 && rand(state) < 0.08 && !state.queue.some((q) => q.event === 'union_drive')) {
+    if (monthly && w.count >= 30 && w.morale < 45 && rand(state) < 0.08 * (state.settings?.labour ?? 1) && !state.queue.some((q) => q.event === 'union_drive')) {
       state.queue.push({ event: 'union_drive', data: { role } });
     }
     return;
@@ -320,7 +322,7 @@ function unionTick(state, role, monthly) {
     }
   }
   // Wildcat action when morale collapses.
-  if (!state.strikes[role] && w.morale < 28 && rand(state) < 0.04 * (0.5 + u.strength)) {
+  if (!state.strikes[role] && w.morale < 28 && rand(state) < 0.04 * (0.5 + u.strength) * (state.settings?.labour ?? 1)) {
     startAction(state, role, w.morale < 18 ? 'strike' : rand(state) < 0.5 ? 'sickout' : 'work-to-rule', 1 + Math.floor(rand(state) * 3), 'over working conditions');
   }
 }

@@ -5,8 +5,9 @@ import { airportByCode, COUNTRIES, REGIONS } from '../data/airports.js';
 import { CLASSES } from '../data/aircraft.js';
 import { ROLE_IDS, ROLES } from '../data/business.js';
 import { MRO_PROVIDERS } from '../data/aircraft.js';
-import { eraFuel, eraRate, eraOf } from '../data/eras.js';
-import { clamp, sum, fail, ok, rand, randNormal, log, money, monthKey, quarterKey, yearOf, weeksInUnit, weekOfYearStart, elapsed } from './core.js';
+import { eraFuel, eraRate, eraOf, cpiIndex, histInflation } from '../data/eras.js';
+import { PRESETS, makeSettings } from '../data/difficulty.js';
+import { clamp, sum, fail, ok, rand, randNormal, log, money, monthKey, quarterKey, yearOf, weeksInUnit, weekOfYearStart, elapsed, setPriceLevel, dayOfYear } from './core.js';
 import { typeOf, isDelivered, makeAircraft, refreshMarkets, removeAircraft, weeklyFromMonthly, aircraftValue } from './fleet.js';
 import { replenishSlots, stations } from './network.js';
 import { maintenanceTick, facilityUpkeep } from './maintenance.js';
@@ -18,21 +19,18 @@ import { generateOffers, reserveContractHours, contractsTick, subsidiesTick, ven
 import { triggerEvent } from './events.js';
 import { buildTimeline, timelineTick, weatherTick, safetyTick } from './safety.js';
 
-export const DIFFICULTY = {
-  easy: { label: 'Easy', cash: 200e6, demand: 1.1 },
-  normal: { label: 'Normal', cash: 120e6, demand: 1.0 },
-  hard: { label: 'Hard', cash: 70e6, demand: 0.9 },
-};
+export const DIFFICULTY = PRESETS;
 
 const zeroCosts = () => ({ checks: 0, recruiting: 0, severance: 0, hedging: 0, incidents: 0 });
 const zeroCapex = () => ({ aircraft: 0, retrofits: 0, facilities: 0, slots: 0, other: 0 });
 
-export function newGame({ name = 'Skyward Air', code = 'SK', hub = 'ORD', seed, difficulty = 'normal', color = '#4da3ff', startYear = 2027 } = {}) {
+export function newGame({ name = 'Skyward Air', code = 'SK', hub = 'ORD', seed, difficulty = 'normal', settings: overrides = {}, color = '#4da3ff', startYear = 2027 } = {}) {
   const ap = airportByCode[hub];
   if (!ap) throw new Error(`Unknown hub ${hub}`);
-  const diff = DIFFICULTY[difficulty] ?? DIFFICULTY.normal;
+  const settings = makeSettings(difficulty, overrides);
   const state = {
-    version: 3,
+    version: 4,
+    settings,
     rng: (seed ?? Math.floor(Math.random() * 2 ** 31)) | 0,
     nextId: 1,
     fleetSerial: 1,
@@ -41,7 +39,7 @@ export function newGame({ name = 'Skyward Air', code = 'SK', hub = 'ORD', seed, 
     startYear,
     status: 'playing',
     airline: { name, code: code.toUpperCase().slice(0, 2), color, slogan: '', home: ap.country, homeName: COUNTRIES[ap.country], difficulty },
-    cash: diff.cash,
+    cash: settings.cash,
     hubs: [{ code: hub, openedWeek: 0, bank: 1, lounge: false, facilities: {} }],
     fleet: [],
     orders: [],
@@ -63,7 +61,7 @@ export function newGame({ name = 'Skyward Air', code = 'SK', hub = 'ORD', seed, 
     loans: [],
     hedges: [],
     finance: { rating: 'BB', score: 45, lossCarry: 0, shares: 20e6, dividends: 0, facilityValue: 0 },
-    macro: { fuel: eraFuel(startYear), economy: 1, baseRate: eraRate(startYear), shocks: [] },
+    macro: { fuel: eraFuel(startYear), economy: 1, baseRate: eraRate(startYear), shocks: [], priceLevel: settings.inflation === 'off' ? 1 : cpiIndex(startYear), inflation: settings.inflation === 'off' ? 0 : histInflation(startYear) },
     disruptions: [],
     typeRestrictions: {},
     rivals: {},
@@ -85,6 +83,7 @@ export function newGame({ name = 'Skyward Air', code = 'SK', hub = 'ORD', seed, 
     lowCashWeeks: 0,
     advanceRemaining: 0,
   };
+  setPriceLevel(state.macro.priceLevel);
   // Founding team hired before launch: enough crew for the first couple of narrowbodies.
   for (const r of ROLE_IDS) state.staff[r] = newWorkforce(state, r, { pilots: 24, cabin: 60, engineers: 12, ground: 50, admin: 45 }[r]);
   if (ap.slots) state.slots[hub] = { held: ap.slots === 2 ? 42 : 70, pool: ap.slots === 2 ? 6 : 60 };
@@ -132,7 +131,7 @@ function yearEnd(state) {
   let delta = 0;
   for (const o of state.board.objectives) {
     const p = objectiveProgress(state, o);
-    delta += p.met ? 7 : -6;
+    delta += p.met ? 7 : -6 / (state.settings?.board ?? 1);
     log(state, `Objective ${p.met ? 'met' : 'missed'}: ${o.label} (${p.value}).`, p.met ? 'good' : 'bad', 'board');
   }
   state.board.confidence = clamp(state.board.confidence + delta, 0, 100);
@@ -147,6 +146,7 @@ function boardReview(state) {
   const change = (price - state.board.lastPrice) / state.board.lastPrice;
   const goodRating = ['AAA', 'AA', 'A', 'BBB', 'BB'].includes(state.finance.rating);
   let delta = clamp(change * 50, -12, 12) + (qProfit > 0 ? 5 : -5) + (goodRating ? 2 : -3) + (state.reputation > 60 ? 2 : 0);
+  if (delta < 0) delta /= state.settings?.board ?? 1;
   if (state.board.reviews < 4 && delta < 0) delta /= 2;
   state.board.reviews += 1;
   state.board.confidence = clamp(state.board.confidence + delta, 0, 100);
@@ -163,7 +163,7 @@ function boardReview(state) {
 
 function demandMacro(state) {
   const shocks = state.macro.shocks.filter((s) => !s.regions).reduce((m, s) => m * s.mult, 1);
-  return state.macro.economy * shocks * (DIFFICULTY[state.airline.difficulty]?.demand ?? 1);
+  return state.macro.economy * shocks * (state.settings?.demand ?? 1);
 }
 
 const routeSumRevenue = (legList) => sum(legList, (l) => l.s.ticket + l.s.ancillary + l.s.cargoRev);
@@ -201,13 +201,50 @@ function processDeliveries(state) {
   }
 }
 
+// Everything fixed in nominal dollars loses real value as prices rise.
+function applyInflation(state) {
+  const i = state.macro.inflation ?? 0;
+  if (!i) return;
+  const e = 1 / (1 + i) ** (1 / 52);
+  state.cash *= e;
+  for (const l of state.loans) {
+    l.principal *= e;
+    l.payment *= e;
+    l.original *= e;
+  }
+  for (const ac of state.fleet) if (!ac.owned && ac.lease) ac.lease.monthly *= e;
+  for (const o of state.orders) {
+    o.price *= e;
+    o.paid *= e;
+  }
+  for (const h of state.hedges) h.price *= e;
+  for (const c of state.contracts.active) c.weekly *= e;
+  for (const sub of state.subsidies.active) sub.weekly *= e;
+  state.finance.lossCarry *= e;
+  if (!state.settings?.cola) for (const w of Object.values(state.staff)) w.pay *= e;
+}
+
 function updateMacro(state) {
   const m = state.macro;
-  m.fuel = clamp(m.fuel + (eraFuel(yearOf(state.week)) - m.fuel) * 0.03 + randNormal(state) * 0.022, 0.2, 2.5);
+  m.fuel = clamp(m.fuel + (eraFuel(yearOf(state.week)) - m.fuel) * 0.03 + randNormal(state) * 0.022 * (state.settings?.fuel ?? 1), 0.2, 2.5);
+  // Inflation: a noisy, persistent version of the historical rate that is
+  // pulled back towards the real price-level path so it stays loosely historical.
+  if (state.settings?.inflation === 'off') {
+    m.inflation = 0;
+    m.priceLevel = 1;
+  } else {
+    const year = yearOf(state.week) + (dayOfYear(state.week) / 365);
+    const gap = Math.log(cpiIndex(year) / m.priceLevel);
+    m.inflDev = (m.inflDev ?? 0) * 0.985 + randNormal(state) * 0.0012;
+    m.inflation = clamp(histInflation(year) + m.inflDev + gap * 0.3, -0.03, 0.25);
+    m.priceLevel *= (1 + m.inflation) ** (1 / 52);
+  }
+  setPriceLevel(m.priceLevel);
   m.economy = clamp(m.economy + (1 - m.economy) * 0.04 + randNormal(state) * 0.008, 0.8, 1.2);
 }
 
 export function advanceWeek(state) {
+  setPriceLevel(state.macro.priceLevel ?? 1);
   if (state.status !== 'playing') return fail('The game is over');
   if (state.pendingEvent) return fail('Resolve the current decision first');
   const prevMonth = monthKey(state.week);
@@ -248,6 +285,7 @@ export function advanceWeek(state) {
     contracts: contracts.revenue,
     subsidies,
     ventures: ventures.revenue,
+    interest: Math.max(0, state.cash) * Math.max(0, state.macro.baseRate - 0.01) / 52,
   };
   const cost = {
     fuel: routeSum((s) => s.cost.fuel),
@@ -290,6 +328,7 @@ export function advanceWeek(state) {
   // Already-paid items (checks, recruiting, hedges) left cash when they happened.
   const prepaid = state.weekCosts.checks + state.weekCosts.recruiting + state.weekCosts.severance + state.weekCosts.hedging + (state.weekCosts.incidents ?? 0);
   state.cash += totalRevenue - (totalCost - cost.depreciation - prepaid) - debt.principal;
+  applyInflation(state);
 
   // ---- Route-level profit (allocate crew pay by crew hours, ownership by aircraft hours)
   const crewPay = pay.pilots + pay.cabin;
@@ -421,7 +460,7 @@ export function advanceWeek(state) {
   // ---- Decisions
   const queued = state.queue.shift();
   if (queued) triggerEvent(state, queued.event, queued.data, true);
-  else if (elapsed(state) > 3 && rand(state) < 0.1) triggerEvent(state);
+  else if (elapsed(state) > 3 && rand(state) < 0.1 * (state.settings?.events ?? 1)) triggerEvent(state);
   return ok({ report });
 }
 

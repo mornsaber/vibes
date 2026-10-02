@@ -19,9 +19,9 @@ import { dispatchReliability } from './maintenance.js';
 import { crewFactor, cockpitCrew, cabinCrewPerFlight } from './staff.js';
 import { airspaceFuelMult, tickShockRegions } from './safety.js';
 
-const MX_HR = { small: 350, narrow: 550, wide: 1300, jumbo: 2000 };
-const NAV_KM = { small: 0.35, narrow: 0.7, wide: 1.4, jumbo: 2.0 };
-const LANDING = { small: 600, narrow: 1500, wide: 4500, jumbo: 7000 };
+const MX_HR = { tiny: 120, small: 350, narrow: 550, wide: 1300, jumbo: 2000 };
+const NAV_KM = { tiny: 0.1, small: 0.35, narrow: 0.7, wide: 1.4, jumbo: 2.0 };
+const LANDING = { tiny: 120, small: 600, narrow: 1500, wide: 4500, jumbo: 7000 };
 const ALL = [...CLASSES, 'C'];
 
 // Appeal of the cabin product given service standards (long flights magnify catering/comfort).
@@ -270,7 +270,7 @@ export function simulateOperations(state, { fuelPrice, macro }) {
       s.cost.maintenance += hours * MX_HR[mx] * (1 + ageYears(state, ac) * 0.03) * lineMx;
       s.cost.navigation += flights * route.distance * NAV_KM[mx];
       s.cost.landing += flights * LANDING[mx] * fee;
-      const cockpit = cockpitCrew(bh) + (type.fe ? 1 : 0);
+      const cockpit = type.cockpit ?? cockpitCrew(bh) + (type.fe ? 1 : 0);
       s.crewHours += hours * (cockpit + cabinCrewPerFlight(ac.config));
       // Crews overnight away from base when a rotation can't return the same day or no hub is involved.
       const overnight = !hubEnds || 2 * bh + 1 > 13;

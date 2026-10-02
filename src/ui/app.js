@@ -93,6 +93,7 @@ function parseHash() {
 let lastHash = '';
 export function render() {
   const g = ctx.game;
+  G.setPriceLevel(g?.macro?.priceLevel ?? 1);
   if (g?.airline?.color) document.documentElement.style.setProperty('--brand', g.airline.color);
   if (!g) {
     app.innerHTML = start.render(ctx);

@@ -1,8 +1,8 @@
 # ✈ Airline Executive Simulator
 
 A deep, turn-based airline management sim. Found an airline in any year from
-1960 at one of 150 real airports, build a fleet from 80 aircraft types (DC-3 to
-A350, Concorde included) with realistic production years and lead times, plan a
+1960 at one of 165 real airports, build a fleet from 120 aircraft types (Islander
+and Twin Otter to A350, Concorde included) with realistic production years and lead times, plan a
 hub-and-spoke network, run engineering, crew, safety and finance, and fight
 100+ real and generated airlines — all while the board judges you every quarter.
 
@@ -34,6 +34,8 @@ Each page is a hash route (`#routes/rt12`, `#fleet/ac/ac3`, `#engineering/schedu
 
 ## Simulation layers
 
+- **Difficulty** — Easy / Normal / Hard / Brutal presets plus eleven custom dials (capital, demand, rival aggression, startups, events, accident risk, weather, board patience, credit costs, union militancy, fuel volatility) and switches for inflation, wage indexing and historical events.
+- **Inflation** — the engine works in constant 2027 dollars while a noisy, loosely historical price level converts everything you see into the dollars of the day. Fixed nominal contracts (loans, lease rents, order balances, hedges, contract and subsidy payments) and cash erode in real terms; cash earns interest; unindexed wages erode and unions claim catch-up raises.
 - **Eras** — start any year from 1960. Regional demand growth, real fare levels, fuel, interest rates, booking costs and accident rates follow history (in constant 2027 dollars). Aircraft are only orderable while in production; older types live on in lease and used markets. First-generation jets need flight engineers, Chapter 2 jets are banned in NA/EU from 2002, airframes retire at 45 years.
 - **History, loosely** — oil embargoes, deregulation, wars, terror attacks, epidemics, financial crises, volcanic ash and airspace closures follow a randomised timeline: each may or may not happen, with shifted timing and severity. Historic airlines (Pan Am, TWA, Eastern, BOAC, Swissair…) rise and fall around their real dates — or survive in your timeline.
 - **Workforce** — five workforces with five-step career ladders (e.g. Second Officer → First Officer → Captain → Training Captain → Chief Pilot), grade pay, tenure, retirement, promotions/demotions, supervisor and manager spans of control, captain requirements, contractor sourcing, rival poaching, unions with agreements, claims, work-to-rule/sick-outs/strikes and organising drives, and delegation to department heads under an HR policy.

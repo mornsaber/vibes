@@ -7,11 +7,11 @@ import { clamp, fail, ok, newId, log, money, distanceKm, sum, randInt, yearOf } 
 import { fareNow, trafficRights, sameMarket, FIFTH_FREEDOM_PERMIT } from './market.js';
 import { typeOf, isFreighter, isDelivered } from './fleet.js';
 
-const TURN = { prop: 0.75, sst: 2, turboprop: 0.4, regional: 0.5, narrow: 0.75, wide: 1.5, jumbo: 2, freighter: 1.5 };
+const TURN = { commuter: 0.3, prop: 0.75, sst: 2, turboprop: 0.4, regional: 0.5, narrow: 0.75, wide: 1.5, jumbo: 2, freighter: 1.5 };
 
 export const blockHours = (type, d) => d / type.speed + 0.5;
 export const roundTripHours = (type, d) => 2 * (blockHours(type, d) + TURN[type.cat]);
-export const weeklyHours = (type) => (['wide', 'jumbo', 'freighter'].includes(type.cat) ? 126 : 112);
+export const weeklyHours = (type) => (['wide', 'jumbo', 'freighter'].includes(type.cat) ? 126 : type.cat === 'commuter' ? 100 : 112);
 
 export function availableHours(state, ac) {
   return Math.max(0, weeklyHours(typeOf(ac)) - ac.lostHours - (ac.contractHours || 0));

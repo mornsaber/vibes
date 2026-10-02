@@ -153,7 +153,7 @@ export function cancelOrder(state, orderId) {
 
 const LESSORS = ['AerCap', 'SMBC Aviation Capital', 'Air Lease Corp', 'Avolon', 'BOC Aviation', 'Carlyle Aviation', 'Aviation Capital Group', 'CDB Aviation', 'Aircastle', 'Jackson Square'];
 const SELLERS = ['Liquidator (bankrupt carrier)', 'Fleet renewal sale', 'Lessor remarketing', 'Government disposal', 'Private owner', 'Charter operator'];
-const POPULARITY = { dc3: 3, dc6: 3, l1049: 2, dc7c: 2, vc8: 2, l188: 1, f27: 2, comet4: 0.7, caravelle: 2, b707: 4, dc8: 2, b727: 5, dc9: 4, bac111: 2, b732: 4, b741: 2, b742: 3, dc10: 3, l1011: 1.5, concorde: 0.03, a300: 1.5, a306: 1.5, b752: 3, b763: 3, md80: 4, b733: 4, b738: 5, a320c: 5, a321c: 3, f100: 1.5, erj145: 2, crj2: 2, md11: 1.5, b744: 3, a343: 2, a346: 1, b772: 3, a333: 3, saab340: 1.5, atr725: 2, a320n: 6, b38m: 5, a321n: 5, a223: 3, e175: 3, e195e2: 2, atr72: 3, q400: 2, crj9: 2, a221: 1, a319n: 1, a321xlr: 1.5, b3xm: 1, b789: 3, b788: 2, b78x: 1.5, a359: 3, a35k: 1.5, a339: 2, b77w: 3, b779: 0.5, a388: 1, b748: 0.5, b763f: 1.5, b77f: 1.5, b738f: 2, a332f: 1, atr72f: 1, a321f: 1, b77wsf: 1, b748f: 0.7, a350f: 0.3 };
+const POPULARITY = { bn2: 1, dhc6: 1.5, dhc6s4: 1, l410: 1, emb110: 1, do228: 1, j31: 1, c208: 1.5, b1900: 1.2, an24: 0.6, emb120: 1, sh360: 0.6, dhc7: 0.5, dh8a: 1.2, dh8c: 1.2, atr42: 1.5, f50: 1, do328: 0.6, saab2000: 0.4, cv880: 0.4, vc10: 0.4, trident: 0.5, yak40: 0.3, tu154: 0.6, il62: 0.3, il86: 0.2, bae146: 1, f70: 0.5, erj135: 0.8, crj7: 1.2, e190: 2, a318: 0.4, b717: 0.8, md90: 0.6, b74sp: 0.3, a310: 0.8, b762: 1, ssj100: 0.4, arj21: 0.3, c919: 0.4, dc3: 3, dc6: 3, l1049: 2, dc7c: 2, vc8: 2, l188: 1, f27: 2, comet4: 0.7, caravelle: 2, b707: 4, dc8: 2, b727: 5, dc9: 4, bac111: 2, b732: 4, b741: 2, b742: 3, dc10: 3, l1011: 1.5, concorde: 0.03, a300: 1.5, a306: 1.5, b752: 3, b763: 3, md80: 4, b733: 4, b738: 5, a320c: 5, a321c: 3, f100: 1.5, erj145: 2, crj2: 2, md11: 1.5, b744: 3, a343: 2, a346: 1, b772: 3, a333: 3, saab340: 1.5, atr725: 2, a320n: 6, b38m: 5, a321n: 5, a223: 3, e175: 3, e195e2: 2, atr72: 3, q400: 2, crj9: 2, a221: 1, a319n: 1, a321xlr: 1.5, b3xm: 1, b789: 3, b788: 2, b78x: 1.5, a359: 3, a35k: 1.5, a339: 2, b77w: 3, b779: 0.5, a388: 1, b748: 0.5, b763f: 1.5, b77f: 1.5, b738f: 2, a332f: 1, atr72f: 1, a321f: 1, b77wsf: 1, b748f: 0.7, a350f: 0.3 };
 
 export function refreshMarkets(state, initial = false) {
   state.market.leases = state.market.leases.filter((o) => o.expiresWeek > state.week);
@@ -295,13 +295,13 @@ export function validateConfig(type, config) {
     if (!Number.isInteger(n) || n < 0) return fail('Seat counts must be whole numbers');
   }
   if (config.F && !['wide', 'jumbo'].includes(type.cat)) return fail('First class needs a widebody');
-  if (seatCount(config) < 10) return fail('Too few seats');
+  if (seatCount(config) < 4) return fail('Too few seats');
   const units = cabinUnits(type, config);
   if (units > type.maxSeats) return fail(`Layout uses ${units.toFixed(0)} of ${type.maxSeats} available floor units`);
   return ok({ units });
 }
 
-const SEAT_COST = { F: 600e3, J: { small: 25e3, narrow: 45e3, wide: 220e3, jumbo: 220e3 }, W: 25e3, Y: 6e3 };
+const SEAT_COST = { F: 600e3, J: { tiny: 15e3, small: 25e3, narrow: 45e3, wide: 220e3, jumbo: 220e3 }, W: 25e3, Y: 6e3 };
 export function retrofitCost(ac, config) {
   const type = typeOf(ac);
   let cost = 250e3;

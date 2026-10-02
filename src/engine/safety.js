@@ -38,14 +38,14 @@ export function riskFactors(state, ac) {
 // Hull losses per flight before multipliers (modern baseline ~0.15 per million).
 const HULL_BASE = 0.15e-6;
 export const incidentRates = (state, ac) => {
-  const r = riskFactors(state, ac).total * HULL_BASE;
+  const r = riskFactors(state, ac).total * HULL_BASE * (state.settings?.safety ?? 1);
   return { hull: r, serious: r * 25, minor: r * 300 };
 };
 
 export function hijackRate(state) {
   const y = yearOf(state.week);
   const era = y >= 1968 && y <= 1972 ? 3e-6 : y < 1968 ? 0.5e-6 : y < 2001 ? 0.4e-6 : y <= 2002 ? 0.2e-6 : 0.03e-6;
-  return era * [2, 1.4, 1, 0.7, 0.45][(state.service.security ?? 3) - 1];
+  return era * [2, 1.4, 1, 0.7, 0.45][(state.service.security ?? 3) - 1] * (state.settings?.safety ?? 1);
 }
 
 const poisson = (state, lambda) => Math.floor(lambda) + (rand(state) < lambda % 1 ? 1 : 0);
@@ -155,11 +155,11 @@ export function weatherTick(state) {
   for (const code of stations(state)) {
     const ap = airportByCode[code];
     for (const w of WEATHER) {
-      if (!w.months.includes(month) || !w.match(ap) || rand(state) > w.p) continue;
+      if (!w.months.includes(month) || !w.match(ap) || rand(state) > w.p * (state.settings?.weather ?? 1)) continue;
       const days = randInt(state, w.days[0], w.days[1]);
       state.disruptions.push({ name: `${w.name} at ${code}`, codes: [code], factor: Math.max(0, 1 - days / 7), weeks: 1, weather: true });
       let damaged = '';
-      if (w.damage && rand(state) < w.damage) {
+      if (w.damage && rand(state) < w.damage * Math.min(1.5, (state.settings?.weather ?? 1))) {
         const exposed = state.fleet.filter((a) => isDelivered(state, a) && !inDowntime(state, a) && a.schedule.some((s) => { const r = routeById(state, s.routeId); return r && (r.a === code || r.b === code); }));
         if (exposed.length) {
           const ac = pick(state, exposed);
@@ -213,8 +213,9 @@ export function closeAirspace(state, name, weeks, fuelMult = 1.15) {
 
 export function buildTimeline(state) {
   state.timeline = [];
+  if (state.settings?.history === 'off') return;
   for (const h of HISTORY) {
-    if (h.year < state.startYear || rand(state) > h.p) continue;
+    if (h.year < state.startYear || rand(state) > Math.min(1, h.p * Math.sqrt((state.settings?.events ?? 1)))) continue;
     const months = Math.round((rand(state) * 2 - 1) * h.jitter);
     const week = weekOfYearStart(h.year) + Math.round(((h.month - 1 + months) * 52) / 12);
     if (week <= state.week + 4) continue;

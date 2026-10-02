@@ -1,4 +1,4 @@
-import { G, esc, money, pct, int, num, panel, table, tabs, statement, airportOptions, pill, ap, lineChart, kpi } from '../util.js';
+import { G, esc, money, pct, int, num, panel, table, tabs, statement, airportOptions, pill, ap, lineChart, kpi, usd, nominal, fromNominal } from '../util.js';
 import { routePreview } from './routes.js';
 
 export function render(c) {
@@ -49,7 +49,7 @@ function analyst(c) {
     </div>
     <div class="grid cols-2">
       ${panel('Seasonality (index by week of year)', lineChart([{ values: season.map((x) => x * 100), cls: 'profit' }], { format: (v) => v.toFixed(0) }))}
-      ${panel('Reference fares by cabin', statement(G.CLASSES.map((k) => [G.CABIN[k].name, `$${int(G.fareNow(s, d, k))}`]).concat([['Cargo', `$${G.refCargoRate(d).toFixed(2)}/kg`]])))}
+      ${panel('Reference fares by cabin', statement(G.CLASSES.map((k) => [G.CABIN[k].name, usd(G.fareNow(s, d, k))]).concat([['Cargo', `${usd(G.refCargoRate(d), 2)}/kg`]])))}
     </div>
     ${panel('Route assessment', routePreview(s, m.a, m.b))}
     ${panel('Aircraft types that can fly it', table(fleetFit, [
@@ -99,6 +99,9 @@ function learn() {
     ['Scheduling', 'Assign aircraft to routes with a weekly frequency. Each aircraft has 112 block hours a week (126 for widebodies); round trips use flying time plus turnaround. Congested airports need slots.'],
     ['Engineering', 'A-checks every 750 flight hours, B every 6 months, C every 2 years or 7,500 hours, D every 6 years. Overdue by 10% and the regulator grounds the aircraft. Build line stations and heavy hangars at hubs for cheaper in-house work, or outsource to MRO shops of varying quality, price and waiting time. Reliability drives cancellations and on-time performance.'],
     ['Eras', 'Start any year from 1960. Demand grows (and shifts towards Asia and the Middle East) over the decades, fares start high and fall with deregulation and low-cost carriers, fuel and interest rates follow history, and accidents were far more common early on. Aircraft can only be ordered while in production; older types live on in the lease and used markets. First-generation jets need a flight engineer, are banned by Chapter 2 noise rules in North America and Europe from 2002, and every airframe retires at 45 years.'],
+    ['Difficulty', 'Pick Easy, Normal, Hard or Brutal — or customise eleven dials: capital, demand, rival aggression, startups, event frequency, accident risk, weather, board patience, cost of credit, union militancy and fuel volatility. Most can be changed later under Management › Airline.'],
+    ['Inflation', 'Money is shown in the dollars of the day and follows a noisy version of real inflation — a 707 costs a few million in 1965, a 787 well over a hundred million in 2027. Inflation quietly shrinks your loans, lease rents and order balances, but also the value of cash (which earns interest). If wages aren’t indexed, real pay erodes and unions come back with catch-up claims — especially in the 1970s.'],
+    ['Small aircraft', 'Commuter types like the Islander, Twin Otter, Caravan and Beech 1900 need no cabin crew under 20 seats and use tiny runways — Lukla, Barra beach, St Barts, London City. Niche types from Convairs and VC10s to Tu-154s, BAe 146s, 717s and COMAC jets come and go with their production years.'],
     ['History, loosely', 'Oil embargoes, deregulation, wars, terror attacks, epidemics, financial crises, volcanic ash and airspace closures roughly follow real history — but each may or may not happen, with shifted timing and severity. Real airlines are founded and fail around their historical dates, though some survive in your timeline.'],
     ['People', 'Five workforces, each with a five-step career ladder (e.g. Second Officer → First Officer → Captain → Training Captain → Chief Pilot) with its own pay. Requirements come from your flying; every cockpit needs a captain and every 10–25 frontline staff need a supervisor. Staff gain tenure, are promoted (automatically if you like), retire at the end of their careers and can be poached by rivals paying more. Contract out any share of frontline work for a premium to avoid hiring and unions. Once a department is big enough, hand it to its manager.'],
     ['Unions', 'Unions negotiate new agreements every three years and back their claims with work-to-rule, sick-outs or strikes. Unhappy non-union staff may organise. Contracting out weakens unions — but angers them.'],

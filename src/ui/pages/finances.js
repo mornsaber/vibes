@@ -1,4 +1,4 @@
-import { G, esc, money, pct, int, num, kpi, panel, table, statement, options, pill, typeName, signed, barChart, lineChart } from '../util.js';
+import { G, esc, money, pct, int, num, kpi, panel, table, statement, options, pill, typeName, signed, barChart, lineChart, usd, nominal, fromNominal } from '../util.js';
 import { formValues } from '../app.js';
 
 const COST_LABELS = {
@@ -8,7 +8,7 @@ const COST_LABELS = {
   facilities: 'Hubs & facilities', overhead: 'Overhead (IT, insurance, recruiting)', sga: 'Sales, general & admin', contracts: 'Contract & venture costs',
   interest: 'Interest', depreciation: 'Depreciation', tax: 'Corporate tax',
 };
-const REV_LABELS = { passenger: 'Passenger tickets', ancillary: 'Ancillaries', cargo: 'Cargo', contracts: 'Charter & special contracts', subsidies: 'Government subsidies', ventures: 'Ventures' };
+const REV_LABELS = { interest: 'Interest on cash', passenger: 'Passenger tickets', ancillary: 'Ancillaries', cargo: 'Cargo', contracts: 'Charter & special contracts', subsidies: 'Government subsidies', ventures: 'Ventures' };
 
 export function render(c) {
   const s = c.state;
@@ -25,7 +25,8 @@ export function render(c) {
     ${kpi('Net / week', money(r?.profit ?? 0), { cls: (r?.profit ?? 0) < 0 ? 'bad' : 'good', sub: `EBITDA ${money(r?.ebitda ?? 0)}` })}
     ${kpi('Credit rating', s.finance.rating, { sub: `score ${int(s.finance.score)}` })}
     ${kpi('Total debt', money(G.totalDebt(s)), { sub: `${s.loans.length} facilities` })}
-    ${kpi('Share price', `$${G.sharePrice(s).toFixed(2)}`, { sub: `Market cap ${money(G.marketCap(s))}` })}
+    ${kpi('Share price', usd(G.sharePrice(s), 2), { sub: `Market cap ${money(G.marketCap(s))}` })}
+    ${kpi('Inflation', pct(s.macro.inflation ?? 0, 1), { sub: `Prices ${num(s.macro.priceLevel ?? 1, 2)}× 2027 levels` })}
   </div>
   <div class="grid cols-2">
     ${panel("Last week's income statement", r ? statement([
@@ -58,8 +59,8 @@ export function render(c) {
       ['Your borrowing rate', `${pct(G.loanRateFor(s, 'term'), 2)} term · ${pct(G.loanRateFor(s, 'secured'), 2)} secured`],
     ])}<div class="ratings">${G.RATINGS.map((x) => `<span class="${x === s.finance.rating ? 'active' : ''}">${x}</span>`).join('')}</div>`)}
     ${panel('Raise debt', `<div class="stack">
-      <div class="row" data-form><input type="number" name="amount" value="${Math.min(20e6, Math.floor(G.termLoanLimit(s) / 1e6) * 1e6)}" step="1000000" class="w-140"><button data-action="term-loan">5-year term loan</button><span class="muted small">limit ${money(G.termLoanLimit(s))}</span></div>
-      <div class="row" data-form><input type="number" name="amount" value="${Math.min(10e6, Math.floor(rcfHeadroom / 1e6) * 1e6)}" step="1000000" class="w-140"><button data-action="rcf-draw">Draw revolving credit</button><span class="muted small">headroom ${money(rcfHeadroom)}</span></div>
+      <div class="row" data-form><input type="number" name="amount" value="${Math.round(nominal(Math.min(20e6, G.termLoanLimit(s))) / 1e5) * 1e5}" step="1000000" class="w-140"><button data-action="term-loan">5-year term loan</button><span class="muted small">limit ${money(G.termLoanLimit(s))}</span></div>
+      <div class="row" data-form><input type="number" name="amount" value="${Math.round(nominal(Math.min(10e6, rcfHeadroom)) / 1e5) * 1e5}" step="1000000" class="w-140"><button data-action="rcf-draw">Draw revolving credit</button><span class="muted small">headroom ${money(rcfHeadroom)}</span></div>
       <p class="muted small">Aircraft-secured loans (80% of value, 12 years, cheaper) are raised from each owned aircraft's page.</p>
     </div>`)}
   </div>
@@ -81,36 +82,36 @@ export function render(c) {
   ], { empty: 'No leased aircraft.' }))}
   <div class="grid cols-2">
     ${panel('Fuel hedging', `${statement([
-      ['Spot jet fuel', `$${s.macro.fuel.toFixed(3)}/kg`],
+      ['Spot jet fuel', `${usd(s.macro.fuel, 3)}/kg`],
       ['Hedged share', pct(hedged)],
-      ['Effective price paid', `$${G.effectiveFuelPrice(s).toFixed(3)}/kg`],
+      ['Effective price paid', `${usd(G.effectiveFuelPrice(s), 3)}/kg`],
     ])}${table(s.hedges, [
       { h: 'Volume', v: (h) => pct(h.ratio) },
-      { h: 'Locked price', v: (h) => `$${h.price.toFixed(3)}/kg` },
+      { h: 'Locked price', v: (h) => `${usd(h.price, 3)}/kg` },
       { h: 'Weeks left', v: (h) => h.weeksLeft },
     ], { empty: 'No hedges in place.' })}
     <div class="row wrap" data-form><select name="ratio">${options([[0.1, '10%'], [0.25, '25%'], [0.4, '40%'], [0.5, '50%']], 0.25)}</select><select name="weeks">${options([[13, '13 weeks'], [26, '26 weeks'], [52, '52 weeks']], 26)}</select><button data-action="hedge">Buy hedge</button></div>
     <p class="muted small">Locks part of your fuel at today's forward price (spot + 2–5%). A 25%/26-week hedge would cost about ${money(quote.premium)} in premium.</p>`)}
     ${panel('Equity', `${statement([
       ['Shares outstanding', `${num(s.finance.shares / 1e6, 2)}M`],
-      ['Share price', `$${G.sharePrice(s).toFixed(2)}`],
+      ['Share price', usd(G.sharePrice(s), 2)],
       ['Book equity', money(G.bookEquity(s))],
       ['Dividends paid (lifetime)', money(s.finance.dividends)],
       ['Tax losses carried forward', money(s.finance.lossCarry)],
-    ])}${lineChart([{ values: s.history.slice(-104).map((h) => h.sharePrice), cls: 'cash' }], { format: (v) => `$${v.toFixed(2)}` })}
-    <div class="row" data-form><input type="number" name="amount" value="25000000" step="1000000" class="w-140"><button data-action="issue-shares">Issue shares</button><button data-action="dividend">Pay dividend</button></div>
+    ])}${lineChart([{ values: s.history.slice(-104).map((h) => h.sharePrice), cls: 'cash' }], { format: (v) => usd(v, 2) })}
+    <div class="row" data-form><input type="number" name="amount" value="${Math.round(nominal(25e6) / 1e5) * 1e5}" step="100000" class="w-140"><button data-action="issue-shares">Issue shares</button><button data-action="dividend">Pay dividend</button></div>
     <p class="muted small">Issuing shares raises cash at a 8% discount but annoys the board; dividends please it.</p>`)}
   </div>`;
 }
 
 export const actions = {
-  'term-loan': (el, ctx) => G.takeTermLoan(ctx.game, formValues(el).amount),
-  'rcf-draw': (el, ctx) => G.drawRcf(ctx.game, formValues(el).amount),
+  'term-loan': (el, ctx) => G.takeTermLoan(ctx.game, fromNominal(formValues(el).amount)),
+  'rcf-draw': (el, ctx) => G.drawRcf(ctx.game, fromNominal(formValues(el).amount)),
   repay: (el, ctx) => G.repayLoan(ctx.game, el.dataset.id),
   hedge: (el, ctx) => {
     const v = formValues(el);
     return G.buyHedge(ctx.game, Number(v.ratio), Number(v.weeks));
   },
-  'issue-shares': (el, ctx) => (confirm('Issue new shares?') ? G.issueShares(ctx.game, formValues(el).amount) : null),
-  dividend: (el, ctx) => G.payDividend(ctx.game, formValues(el).amount),
+  'issue-shares': (el, ctx) => (confirm('Issue new shares?') ? G.issueShares(ctx.game, fromNominal(formValues(el).amount)) : null),
+  dividend: (el, ctx) => G.payDividend(ctx.game, fromNominal(formValues(el).amount)),
 };

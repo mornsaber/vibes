@@ -16,14 +16,14 @@ export function roundTripCost(state, type, d) {
   const bh = blockHours(type, d);
   const fuel = 2 * type.burn * d * state.macro.fuel;
   const crew = 2 * bh * ((2 * ROLES.pilots.salary + 4 * ROLES.cabin.salary) / 52 / 15) * wageIndex(state);
-  const mx = 2 * bh * { small: 350, narrow: 550, wide: 1300, jumbo: 2000 }[type.mx];
-  const fees = 2 * ({ small: 600, narrow: 1500, wide: 4500, jumbo: 7000 }[type.mx] + d * { small: 0.35, narrow: 0.7, wide: 1.4, jumbo: 2 }[type.mx]);
+  const mx = 2 * bh * { tiny: 120, small: 350, narrow: 550, wide: 1300, jumbo: 2000 }[type.mx];
+  const fees = 2 * ({ tiny: 120, small: 600, narrow: 1500, wide: 4500, jumbo: 7000 }[type.mx] + d * { tiny: 0.1, small: 0.35, narrow: 0.7, wide: 1.4, jumbo: 2 }[type.mx]);
   const ownership = (type.price * 0.0075 * 12) / 52 / 6;
   return fuel + crew + mx + fees + ownership;
 }
 
 const CAT_FOR_SEATS = (seats) => (seats > 260 ? 'wide' : seats > 120 ? 'narrow' : 'regional');
-const REF_TYPE = { regional: { burn: 1.9, speed: 800, mx: 'small', price: 32e6 }, narrow: { burn: 2.6, speed: 830, mx: 'narrow', price: 55e6 }, wide: { burn: 7, speed: 900, mx: 'wide', price: 150e6 }, jumbo: { burn: 11, speed: 900, mx: 'jumbo', price: 190e6 }, turboprop: { burn: 0.9, speed: 510, mx: 'small', price: 27e6 }, freighter: { burn: 7, speed: 880, mx: 'wide', price: 150e6 } };
+const REF_TYPE = { commuter: { burn: 0.35, speed: 400, mx: 'tiny', price: 5e6 }, regional: { burn: 1.9, speed: 800, mx: 'small', price: 32e6 }, narrow: { burn: 2.6, speed: 830, mx: 'narrow', price: 55e6 }, wide: { burn: 7, speed: 900, mx: 'wide', price: 150e6 }, jumbo: { burn: 11, speed: 900, mx: 'jumbo', price: 190e6 }, turboprop: { burn: 0.9, speed: 510, mx: 'small', price: 27e6 }, freighter: { burn: 7, speed: 880, mx: 'wide', price: 150e6 } };
 
 function homeAirports(state) {
   return AIRPORTS.filter((a) => sameMarket(state.airline.home, a.country));

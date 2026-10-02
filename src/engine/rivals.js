@@ -144,6 +144,7 @@ export function rivalsTick(state) {
   const offers = { pilots: 0, cabin: 0, engineers: 0 };
   const poachers = { pilots: null, cabin: null, engineers: null };
 
+  const agg = (state.settings?.rivals ?? 1);
   for (const r of activeRivals(state)) {
     const rs = state.rivals[r.id];
     // Finances.
@@ -172,7 +173,7 @@ export function rivalsTick(state) {
     const overlap = overlapRoutes(state, r.id);
     const pressure = sum(overlap, (rt) => (rt.last?.share ?? 0) * (rt.last?.paxTotal ?? 0)) / Math.max(1, rs.fleet * 300);
     const allied = state.partners.codeshares.includes(r.id) || (state.partners.alliance && r.alliance === state.partners.alliance) || state.stakes[r.id];
-    rs.hostility = clamp(rs.hostility + (overlap.length ? 0.01 + pressure * r.aggression : -0.04) - (allied ? 0.1 : 0), 0, 1);
+    rs.hostility = clamp(rs.hostility + (overlap.length ? (0.01 + pressure * r.aggression) * agg : -0.04) - (allied ? 0.1 : 0), 0, 1);
     rs.relation = clamp(rs.relation + (allied ? 1 : 0) - rs.hostility * 3 + 0.5, 0, 100);
 
     // Responses on contested routes.
@@ -181,10 +182,10 @@ export function rivalsTick(state) {
       if (allied || share < 0.18) continue;
       const m = (market(state, rt.a, rt.b)[r.id] ??= {});
       const roll = rand(state);
-      if (roll < r.aggression * rs.hostility * 0.25) {
+      if (roll < r.aggression * agg * rs.hostility * 0.25) {
         m.fare = Math.max(0.7, (m.fare ?? 1) * 0.9);
         log(state, `${r.name} slashes fares on ${rt.a}–${rt.b} to fight you (${Math.round((1 - m.fare) * 100)}% below normal).`, 'bad', 'rivals');
-      } else if (roll < r.aggression * rs.hostility * 0.45) {
+      } else if (roll < r.aggression * agg * rs.hostility * 0.45) {
         m.cap = Math.min(2, (m.cap ?? 1) * 1.25);
         log(state, `${r.name} adds capacity on ${rt.a}–${rt.b}.`, 'bad', 'rivals');
       } else if (share > 0.5 && rand(state) < 0.03) {
@@ -234,7 +235,7 @@ export function rivalsTick(state) {
     const last = rt.last;
     if (!last || last.contribution <= 0 || last.lf < 0.82) continue;
     const present = rivalsOn(state, rt.a, rt.b).filter((x) => x.nonstop);
-    if (present.length >= 2 || rand(state) > 0.04) continue;
+    if (present.length >= 2 || rand(state) > 0.04 * (state.settings?.rivals ?? 1)) continue;
     const candidates = activeRivals(state).filter((r) => r.type !== 'cargo' && !present.some((p) => p.id === r.id) && rt.distance <= RIVAL_TYPES[r.type].range && [rt.a, rt.b].some((c) => sameMarket(r.country, airportByCode[c].country)));
     if (!candidates.length) continue;
     const r = pick(state, candidates);
@@ -244,7 +245,7 @@ export function rivalsTick(state) {
 
   // Startups appear — more often when the industry (and you) are making money.
   const profitable = (state.lastReport?.profit ?? 0) > 0;
-  if (year >= 1970 && rand(state) < 0.025 * (profitable ? 1.6 : 1) * state.macro.economy) spawnStartup(state);
+  if (year >= 1970 && rand(state) < 0.025 * (profitable ? 1.6 : 1) * state.macro.economy * (state.settings?.startups ?? 1)) spawnStartup(state);
 
   // Consolidation among rivals.
   if (rand(state) < 0.012) rivalMerger(state);
@@ -388,7 +389,7 @@ export function acquisitionTerms(state, id) {
 // Fleet types a carrier of this kind would plausibly fly in this year.
 function typicalTypes(state, rtype) {
   const year = yearOf(state.week);
-  const live = AIRCRAFT.filter((t) => inService(t, year) && year - t.intro >= 1 && t.cat !== 'freighter' && t.cat !== 'sst');
+  const live = AIRCRAFT.filter((t) => inService(t, year) && year - t.intro >= 1 && t.cat !== 'freighter' && t.cat !== 'sst' && t.cat !== 'commuter');
   const pickCat = (cats) => live.filter((t) => cats.includes(t.cat));
   if (rtype === 'connector') return pickCat(['wide', 'jumbo']).length ? pickCat(['wide', 'jumbo']) : live;
   if (rtype === 'lcc' || rtype === 'ulcc') return pickCat(['narrow']).length ? pickCat(['narrow']) : live;

@@ -18,4 +18,5 @@ export { ROLES, ROLE_IDS, SERVICE, SERVICE_IDS, VENTURES, RATINGS, ACTIONS, HR_P
 export * from './safety.js';
 export { HISTORY, AIRSPACE, WEATHER } from '../data/history.js';
 export * from '../data/eras.js';
+export * from '../data/difficulty.js';
 export { inProduction, inService, LIFE_LIMIT_YEARS } from '../data/aircraft.js';

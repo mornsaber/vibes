@@ -50,3 +50,9 @@ export const ERAS = [
 export const eraOf = (year) => [...ERAS].reverse().find((e) => year >= e.from) ?? ERAS[0];
 
 export const START_YEARS = [1960, 1970, 1978, 1985, 1995, 2005, 2015, 2027];
+
+// US consumer price index (annual average), used as a loose guide for the
+// in-game price level. 2027 = 1.
+const CPI = [[1960, 29.6], [1965, 31.5], [1970, 38.8], [1975, 53.8], [1980, 82.4], [1985, 107.6], [1990, 130.7], [1995, 152.4], [2000, 172.2], [2005, 195.3], [2010, 218.1], [2015, 237.0], [2020, 258.8], [2022, 292.7], [2024, 313.7], [2027, 336], [2040, 450]];
+export const cpiIndex = (year) => interp(CPI, year) / 336;
+export const histInflation = (year) => interp(CPI, year + 0.5) / interp(CPI, year - 0.5) - 1;

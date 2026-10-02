@@ -7,6 +7,7 @@ const setup = (opts = {}) => G.newGame({ name: 'Test Air', code: 'TA', hub: 'DEN
 function run(s, weeks) {
   for (let i = 0; i < weeks; i++) {
     if (s.pendingEvent) G.resolveEvent(s, s.pendingEvent.choices.findIndex((c) => !c.disabled));
+    if (s.status !== 'playing') return;
     const res = G.advanceWeek(s);
     assert.ok(res.ok, res.error);
   }
@@ -244,7 +245,7 @@ test('charters reserve aircraft hours and pay out', () => {
   assert.ok(G.acceptContract(s, offer.id, ac.id).ok);
   run(s, 2);
   assert.ok(ac.contractHours > 0);
-  assert.ok(s.lastReport.revenue.contracts >= 500e3);
+  assert.ok(s.lastReport.revenue.contracts >= 490e3, 'nominal contract value erodes slightly with inflation');
 });
 
 test('every event builds and resolves every choice', () => {
@@ -315,6 +316,7 @@ test('a five-year game runs without errors', () => {
   for (let i = 0; i < 8; i++) G.assignAircraft(s, quickLease(s, i < 6 ? 'b38m' : 'b789').id, s.routes[i < 6 ? i : 5].id);
   for (let w = 0; w < 260 && s.status === 'playing'; w++) {
     if (s.pendingEvent) G.resolveEvent(s, s.pendingEvent.choices.findIndex((c) => !c.disabled));
+    if (s.status !== 'playing') break;
     assert.ok(G.advanceWeek(s).ok);
     assert.ok(Number.isFinite(s.cash), 'cash stays finite');
   }
@@ -488,8 +490,71 @@ test('a game from 1960 runs for a decade', () => {
   for (let i = 0; i < 6; i++) G.assignAircraft(s, quickLease(s, i % 2 ? 'dc6' : 'l188').id, s.routes[i % 4].id);
   for (let w = 0; w < 520 && s.status === 'playing'; w++) {
     if (s.pendingEvent) G.resolveEvent(s, s.pendingEvent.choices.findIndex((c) => !c.disabled));
+    if (s.status !== 'playing') break;
     assert.ok(G.advanceWeek(s).ok);
     assert.ok(Number.isFinite(s.cash));
   }
   assert.ok(G.yearOf(s.week) >= 1962);
+});
+
+// ---------------------------------------------------------------------------
+// Difficulty, inflation, niche aircraft
+
+test('difficulty presets and custom overrides shape the game', () => {
+  const easy = G.newGame({ hub: 'DEN', seed: 1, difficulty: 'easy' });
+  const brutal = G.newGame({ hub: 'DEN', seed: 1, difficulty: 'brutal' });
+  assert.ok(easy.cash > brutal.cash);
+  assert.ok(easy.settings.safety < brutal.settings.safety);
+  const custom = G.newGame({ hub: 'DEN', seed: 1, difficulty: 'normal', settings: { cash: 300e6, safety: 0, startups: 0 } });
+  assert.equal(custom.cash, 300e6);
+  const ac = quickLease(custom, 'a320n');
+  ac.reliability = 10;
+  assert.equal(G.incidentRates(custom, ac).hull, 0, 'accidents can be switched off');
+});
+
+test('inflation erodes nominal debt and shows money in the dollars of the day', () => {
+  const s = G.newGame({ hub: 'JFK', seed: 2, startYear: 1975 });
+  assert.ok(s.macro.priceLevel < 0.2);
+  G.setPriceLevel(s.macro.priceLevel);
+  assert.equal(G.money(60e6), G.money(60e6 * s.macro.priceLevel / G.priceLevel()));
+  assert.match(G.money(60e6), /\$9\.\dM|\$\d\.\dM/, 'a $60M (2027) jet costs single-digit millions in 1975');
+  G.takeTermLoan(s, 20e6);
+  const loan = s.loans[0];
+  run(s, 52);
+  // 1970s inflation shrinks the real burden far faster than amortisation alone.
+  const amortOnly = 20e6 * 0.8;
+  assert.ok(loan.principal < amortOnly);
+  assert.ok(s.macro.priceLevel > 0.16);
+  const off = G.newGame({ hub: 'JFK', seed: 2, startYear: 1975, settings: { inflation: 'off' } });
+  run(off, 10);
+  assert.equal(off.macro.priceLevel, 1);
+});
+
+test('without wage indexing, real pay erodes and union claims grow', () => {
+  const s = G.newGame({ hub: 'JFK', seed: 2, startYear: 1975, settings: { cola: false } });
+  const demand0 = G.unionDemand(s, 'pilots');
+  run(s, 52);
+  assert.ok(s.staff.pilots.pay < 0.95);
+  assert.ok(G.unionDemand(s, 'pilots') > demand0);
+});
+
+test('commuter aircraft fly short strips without cabin crew', () => {
+  const s = G.newGame({ hub: 'JFK', seed: 2, startYear: 2015 });
+  const { route } = G.openRoute(s, 'JFK', 'ACK');
+  const otter = quickLease(s, 'dhc6s4');
+  assert.ok(G.setFrequency(s, otter.id, route.id, 14).ok);
+  assert.equal(G.cabinCrewPerFlight(otter.config), 0);
+  assert.equal(G.staffRequirements(s).cabin, 0);
+  const sbh = G.openRoute(G.newGame({ hub: 'SJU', seed: 1, startYear: 2015 }), 'SJU', 'SBH');
+  assert.ok(sbh.ok);
+  assert.ok(G.airportByCode.LUA.runway < G.aircraftById.atr72.runway);
+});
+
+test('niche types follow production years', () => {
+  const y1965 = G.newGame({ hub: 'LHR', seed: 2, startYear: 1965 });
+  assert.ok(G.orderAircraft(y1965, 'vc10').ok);
+  assert.equal(G.orderAircraft(y1965, 'bae146').ok, false);
+  const y2020 = G.newGame({ hub: 'PEK', seed: 2, startYear: 2020 });
+  assert.ok(G.orderAircraft(y2020, 'c919').ok, 'orders open before entry into service');
+  assert.equal(G.orderAircraft(y2020, 'il86').ok, false);
 });

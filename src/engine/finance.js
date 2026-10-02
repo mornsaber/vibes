@@ -2,7 +2,7 @@
 // credit), credit rating, tax, equity and valuation.
 
 import { RATINGS, RATING_SPREAD } from '../data/business.js';
-import { clamp, fail, ok, newId, log, money, sum } from './core.js';
+import { clamp, fail, ok, newId, log, money, cents, sum } from './core.js';
 import { typeOf, aircraftValue, isDelivered, weeklyFromMonthly } from './fleet.js';
 
 // ---------------------------------------------------------------------------
@@ -32,7 +32,7 @@ export function buyHedge(state, ratio, weeks) {
   state.cash -= premium;
   state.weekCosts.hedging += premium;
   state.hedges.push({ id: newId(state, 'hg'), ratio, price, weeksLeft: weeks });
-  log(state, `Hedged ${Math.round(ratio * 100)}% of fuel at $${price.toFixed(2)}/kg for ${weeks} weeks (premium ${money(premium)}).`, 'info', 'finance');
+  log(state, `Hedged ${Math.round(ratio * 100)}% of fuel at ${cents(price)}/kg for ${weeks} weeks (premium ${money(premium)}).`, 'info', 'finance');
   return ok();
 }
 
@@ -41,7 +41,7 @@ export function buyHedge(state, ratio, weeks) {
 
 export const baseRate = (state) => state.macro.baseRate;
 export const loanRateFor = (state, kind) =>
-  baseRate(state) + RATING_SPREAD[state.finance.rating] * (kind === 'secured' ? 0.6 : 1) + (kind === 'rcf' ? 0.005 : 0);
+  baseRate(state) + RATING_SPREAD[state.finance.rating] * (kind === 'secured' ? 0.6 : 1) * (state.settings?.credit ?? 1) + (kind === 'rcf' ? 0.005 : 0);
 
 export const totalDebt = (state) => sum(state.loans, (l) => l.principal);
 export const leaseCommitmentWeekly = (state) =>
@@ -239,7 +239,7 @@ export function issueShares(state, amount) {
   state.finance.shares += shares;
   state.cash += amount;
   state.board.confidence = clamp(state.board.confidence - 6, 0, 100);
-  log(state, `Raised ${money(amount)} in a share placing at $${price.toFixed(2)} (${(shares / 1e6).toFixed(2)}M new shares). The board dislikes the dilution.`, 'info', 'finance');
+  log(state, `Raised ${money(amount)} in a share placing at ${cents(price)} (${(shares / 1e6).toFixed(2)}M new shares). The board dislikes the dilution.`, 'info', 'finance');
   return ok();
 }
 

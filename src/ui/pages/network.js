@@ -1,4 +1,4 @@
-import { G, esc, money, pct, int, num, kpi, panel, table, tabs, pill, ap, signed, hbars } from '../util.js';
+import { G, esc, money, pct, int, num, kpi, panel, table, tabs, pill, ap, signed, hbars, usd, nominal, fromNominal } from '../util.js';
 import { worldMap } from '../map.js';
 import { hubsPanel } from './planning.js';
 
@@ -67,7 +67,7 @@ function flow(c) {
     { h: 'Carried', cls: 'num', v: (f) => int(f.pax) },
     { h: 'Spill', cls: 'num', v: (f) => `<span class="${f.demand - f.pax > 50 ? 'warn' : 'muted'}">${int(Math.max(0, f.demand - f.pax))}</span>` },
     { h: 'Revenue', cls: 'num', v: (f) => money(f.revenue) },
-    { h: 'Avg fare', cls: 'num', v: (f) => (f.pax ? `$${int(f.revenue / f.pax)}` : '–') },
+    { h: 'Avg fare', cls: 'num', v: (f) => (f.pax ? usd(f.revenue / f.pax) : '–') },
   ], { empty: 'Advance a week to see passenger flows.' })}`)}`;
 }
 

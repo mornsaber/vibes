@@ -65,6 +65,49 @@ export const AIRCRAFT = [
   A('a346', 'Airbus A340-600', 'Airbus', 'wide', 475, 'F8 J42 Y280', 14400, 880, 9.8, 150e6, 22, 3100, 104, 'wide', 2002, 2011),
   A('b772', 'Boeing 777-200ER', 'Boeing', 'wide', 440, 'J40 W24 Y240', 13000, 900, 8.0, 140e6, 22, 2900, 117, 'wide', 1997, 2013),
   A('a333', 'Airbus A330-300', 'Airbus', 'wide', 440, 'J36 W21 Y240', 11750, 870, 6.6, 115e6, 20, 2800, 104, 'wide', 1994, 2020),
+  // Commuters & bush planes (one or two pilots, no cabin crew under 20 seats)
+  A('bn2', 'Britten-Norman Islander', 'Britten-Norman', 'commuter', 9, 'Y9', 1400, 270, 0.15, 1.5e6, 0.5, 400, 40, 'tiny', 1967, null, { cockpit: 1 }),
+  A('dhc6', 'DHC-6 Twin Otter', 'de Havilland Canada', 'commuter', 19, 'Y19', 1500, 330, 0.3, 4e6, 1, 400, 40, 'tiny', 1966, 1988),
+  A('dhc6s4', 'Viking Twin Otter Series 400', 'Viking Air', 'commuter', 19, 'Y19', 1500, 340, 0.3, 7e6, 1, 400, 52, 'tiny', 2010),
+  A('l410', 'Let L-410 Turbolet', 'Let', 'commuter', 19, 'Y19', 1300, 380, 0.4, 5e6, 1, 500, 52, 'tiny', 1971),
+  A('emb110', 'Embraer EMB-110 Bandeirante', 'Embraer', 'commuter', 18, 'Y18', 1900, 410, 0.35, 3e6, 1, 900, 40, 'tiny', 1973, 1990),
+  A('do228', 'Dornier 228', 'Dornier', 'commuter', 19, 'Y19', 1100, 400, 0.38, 6e6, 1, 800, 52, 'tiny', 1982),
+  A('j31', 'BAe Jetstream 31', 'British Aerospace', 'commuter', 19, 'Y19', 1200, 480, 0.4, 5e6, 0.8, 1100, 52, 'tiny', 1982, 1993),
+  A('c208', 'Cessna 208B Grand Caravan', 'Cessna', 'commuter', 14, 'Y12', 1700, 340, 0.25, 3e6, 1.3, 700, 40, 'tiny', 1986, null, { cockpit: 1 }),
+  A('b1900', 'Beechcraft 1900D', 'Beechcraft', 'commuter', 19, 'Y19', 1100, 520, 0.45, 6e6, 0.8, 1100, 52, 'tiny', 1991, 2002),
+  // Regional turboprops
+  A('an24', 'Antonov An-24', 'Antonov', 'turboprop', 52, 'Y50', 2000, 450, 1.1, 6e6, 1.5, 1200, 52, 'small', 1962, 1979, FE),
+  A('emb120', 'Embraer EMB-120 Brasilia', 'Embraer', 'turboprop', 30, 'Y30', 1500, 550, 0.6, 9e6, 0.8, 1400, 52, 'small', 1985, 2001),
+  A('sh360', 'Short 360', 'Shorts', 'turboprop', 36, 'Y36', 1100, 390, 0.6, 7e6, 1, 1300, 52, 'small', 1982, 1991),
+  A('dhc7', 'Dash 7 (STOL)', 'de Havilland Canada', 'turboprop', 54, 'Y50', 1300, 430, 0.9, 12e6, 1.5, 700, 65, 'small', 1978, 1988),
+  A('dh8a', 'Dash 8-100', 'de Havilland Canada', 'turboprop', 39, 'Y37', 1500, 490, 0.65, 13e6, 1, 1000, 65, 'small', 1984, 2005),
+  A('dh8c', 'Dash 8-300', 'de Havilland Canada', 'turboprop', 56, 'Y50', 1700, 520, 0.8, 17e6, 1.2, 1200, 65, 'small', 1989, 2009),
+  A('atr42', 'ATR 42', 'ATR', 'turboprop', 50, 'Y48', 1300, 500, 0.7, 18e6, 1, 1100, 65, 'small', 1985),
+  A('f50', 'Fokker 50', 'Fokker', 'turboprop', 58, 'Y56', 2000, 520, 0.9, 16e6, 1.2, 1300, 65, 'small', 1987, 1997),
+  A('do328', 'Dornier 328', 'Dornier', 'turboprop', 33, 'Y32', 1300, 620, 0.7, 12e6, 0.8, 1100, 65, 'small', 1993, 2000),
+  A('saab2000', 'Saab 2000', 'Saab', 'turboprop', 53, 'Y50', 2200, 665, 1.1, 18e6, 1.2, 1300, 65, 'small', 1994, 1999),
+  // Niche jets
+  A('cv880', 'Convair 880', 'Convair', 'narrow', 110, 'J20 Y70', 4600, 880, 6.5, 35e6, 3, 2700, 78, 'narrow', 1960, 1962, FE_LOUD),
+  A('vc10', 'Vickers VC10', 'Vickers', 'narrow', 151, 'J16 Y110', 9400, 900, 7.0, 55e6, 6, 2500, 104, 'narrow', 1964, 1970, FE_LOUD),
+  A('trident', 'Hawker Siddeley Trident', 'Hawker Siddeley', 'narrow', 115, 'J12 Y85', 3900, 900, 4.6, 35e6, 3, 2100, 78, 'narrow', 1964, 1978, FE_LOUD),
+  A('yak40', 'Yakovlev Yak-40', 'Yakovlev', 'regional', 32, 'Y32', 1600, 550, 1.4, 6e6, 0.5, 1200, 52, 'small', 1968, 1981, FE_LOUD),
+  A('tu154', 'Tupolev Tu-154M', 'Tupolev', 'narrow', 180, 'J12 Y140', 5200, 900, 5.8, 30e6, 5, 2300, 78, 'narrow', 1972, 2013, FE_LOUD),
+  A('il62', 'Ilyushin Il-62M', 'Ilyushin', 'narrow', 186, 'J12 Y150', 10000, 850, 7.2, 40e6, 6, 3300, 104, 'narrow', 1967, 1995, FE_LOUD),
+  A('il86', 'Ilyushin Il-86', 'Ilyushin', 'wide', 350, 'J24 Y260', 3600, 850, 9.5, 60e6, 15, 2600, 104, 'wide', 1980, 1994, FE_LOUD),
+  A('bae146', 'BAe 146 / Avro RJ85', 'British Aerospace', 'regional', 112, 'J8 Y88', 2900, 750, 2.4, 30e6, 2, 1300, 78, 'small', 1983, 2003),
+  A('f70', 'Fokker 70', 'Fokker', 'regional', 85, 'J8 Y72', 3400, 750, 2.1, 25e6, 1.5, 1300, 78, 'small', 1994, 1997),
+  A('erj135', 'Embraer ERJ-135', 'Embraer', 'regional', 37, 'Y37', 3000, 780, 1.3, 16e6, 0.6, 1600, 65, 'small', 1999, 2017),
+  A('crj7', 'Bombardier CRJ700', 'Bombardier', 'regional', 78, 'J9 Y60', 2600, 820, 1.8, 26e6, 1, 1700, 78, 'small', 2001, 2020),
+  A('e190', 'Embraer E190', 'Embraer', 'regional', 114, 'J8 Y92', 4500, 830, 2.1, 40e6, 2, 1700, 91, 'small', 2005, 2019),
+  A('a318', 'Airbus A318', 'Airbus', 'narrow', 132, 'J12 Y96', 5700, 830, 2.4, 40e6, 2.5, 1900, 104, 'narrow', 2003, 2013),
+  A('b717', 'Boeing 717', 'Boeing', 'narrow', 134, 'J12 Y98', 2600, 810, 2.6, 38e6, 2, 1700, 91, 'narrow', 1999, 2006),
+  A('md90', 'McDonnell Douglas MD-90', 'McDonnell Douglas', 'narrow', 172, 'J12 Y140', 3900, 810, 3.1, 45e6, 3, 2200, 91, 'narrow', 1995, 2000),
+  A('b74sp', 'Boeing 747SP', 'Boeing', 'jumbo', 400, 'F8 J32 Y230', 10800, 900, 11.5, 150e6, 15, 2800, 130, 'jumbo', 1976, 1982, FE),
+  A('a310', 'Airbus A310-300', 'Airbus', 'wide', 280, 'J24 Y180', 9600, 850, 5.6, 85e6, 14, 2300, 104, 'wide', 1983, 1998),
+  A('b762', 'Boeing 767-200ER', 'Boeing', 'wide', 290, 'J24 Y170', 12200, 850, 5.2, 85e6, 12, 2500, 104, 'wide', 1982, 1994),
+  A('ssj100', 'Sukhoi Superjet 100', 'Sukhoi', 'regional', 98, 'J8 Y80', 3000, 830, 2.2, 32e6, 1.5, 1800, 78, 'small', 2011),
+  A('arj21', 'COMAC C909 (ARJ21)', 'COMAC', 'regional', 90, 'J8 Y78', 2200, 820, 2.2, 30e6, 1.5, 1800, 78, 'small', 2016),
+  A('c919', 'COMAC C919', 'COMAC', 'narrow', 174, 'J8 Y150', 4000, 830, 2.7, 70e6, 3, 2200, 156, 'narrow', 2023),
   // Current generation
   A('atr72', 'ATR 72-600', 'ATR', 'turboprop', 78, 'Y72', 1500, 510, 0.85, 27e6, 1, 1400, 78, 'small', 2011),
   A('q400', 'Dash 8-400', 'De Havilland', 'turboprop', 90, 'Y78', 2000, 667, 1.2, 33e6, 1, 1400, 104, 'small', 2000),
@@ -119,6 +162,7 @@ export const LIFE_LIMIT_YEARS = 45;
 export const aircraftById = Object.fromEntries(AIRCRAFT.map((a) => [a.id, a]));
 
 export const CATEGORY_LABELS = {
+  commuter: 'Commuter',
   prop: 'Piston airliner',
   sst: 'Supersonic',
   turboprop: 'Turboprop', regional: 'Regional jet', narrow: 'Narrowbody', wide: 'Widebody', jumbo: 'Very large', freighter: 'Freighter',
@@ -128,10 +172,10 @@ export const CATEGORY_LABELS = {
 // which depends on the aircraft category (a narrowbody "business" seat is a
 // recliner, a widebody one is a lie-flat bed).
 export const CABIN = {
-  F: { name: 'First', short: 'F', fare: 7.0, units: { prop: 6, sst: 6, turboprop: 6, regional: 6, narrow: 6, wide: 6, jumbo: 6 } },
-  J: { name: 'Business', short: 'J', fare: 3.2, units: { prop: 1.5, sst: 1.28, turboprop: 1.5, regional: 1.5, narrow: 2, wide: 3.5, jumbo: 3.5 } },
-  W: { name: 'Premium Economy', short: 'W', fare: 1.7, units: { prop: 1.3, sst: 1.3, turboprop: 1.3, regional: 1.3, narrow: 1.3, wide: 1.5, jumbo: 1.5 } },
-  Y: { name: 'Economy', short: 'Y', fare: 1.0, units: { prop: 1, sst: 1, turboprop: 1, regional: 1, narrow: 1, wide: 1, jumbo: 1 } },
+  F: { name: 'First', short: 'F', fare: 7.0, units: { commuter: 6, prop: 6, sst: 6, turboprop: 6, regional: 6, narrow: 6, wide: 6, jumbo: 6 } },
+  J: { name: 'Business', short: 'J', fare: 3.2, units: { commuter: 1.5, prop: 1.5, sst: 1.28, turboprop: 1.5, regional: 1.5, narrow: 2, wide: 3.5, jumbo: 3.5 } },
+  W: { name: 'Premium Economy', short: 'W', fare: 1.7, units: { commuter: 1.3, prop: 1.3, sst: 1.3, turboprop: 1.3, regional: 1.3, narrow: 1.3, wide: 1.5, jumbo: 1.5 } },
+  Y: { name: 'Economy', short: 'Y', fare: 1.0, units: { commuter: 1, prop: 1, sst: 1, turboprop: 1, regional: 1, narrow: 1, wide: 1, jumbo: 1 } },
 };
 export const CLASSES = ['F', 'J', 'W', 'Y'];
 
@@ -154,20 +198,20 @@ export function seatCount(config) {
 // Maintenance check program. Intervals are in flight hours (fh) and/or weeks;
 // whichever comes first. Durations in days; cost in USD by maintenance class.
 export const CHECKS = {
-  A: { name: 'A-check', fh: 750, weeks: 12, days: { small: 0.5, narrow: 0.5, wide: 1, jumbo: 1 }, cost: { small: 12e3, narrow: 25e3, wide: 60e3, jumbo: 90e3 } },
-  B: { name: 'B-check', fh: null, weeks: 26, days: { small: 1, narrow: 1, wide: 2, jumbo: 3 }, cost: { small: 35e3, narrow: 70e3, wide: 160e3, jumbo: 240e3 } },
-  C: { name: 'C-check', fh: 7500, weeks: 104, days: { small: 10, narrow: 14, wide: 21, jumbo: 28 }, cost: { small: 250e3, narrow: 500e3, wide: 1.4e6, jumbo: 2.2e6 } },
-  D: { name: 'D-check', fh: null, weeks: 312, days: { small: 28, narrow: 35, wide: 49, jumbo: 63 }, cost: { small: 1.5e6, narrow: 3e6, wide: 7e6, jumbo: 11e6 } },
+  A: { name: 'A-check', fh: 750, weeks: 12, days: { tiny: 0.3, small: 0.5, narrow: 0.5, wide: 1, jumbo: 1 }, cost: { tiny: 4e3, small: 12e3, narrow: 25e3, wide: 60e3, jumbo: 90e3 } },
+  B: { name: 'B-check', fh: null, weeks: 26, days: { tiny: 0.5, small: 1, narrow: 1, wide: 2, jumbo: 3 }, cost: { tiny: 10e3, small: 35e3, narrow: 70e3, wide: 160e3, jumbo: 240e3 } },
+  C: { name: 'C-check', fh: 7500, weeks: 104, days: { tiny: 5, small: 10, narrow: 14, wide: 21, jumbo: 28 }, cost: { tiny: 60e3, small: 250e3, narrow: 500e3, wide: 1.4e6, jumbo: 2.2e6 } },
+  D: { name: 'D-check', fh: null, weeks: 312, days: { tiny: 14, small: 28, narrow: 35, wide: 49, jumbo: 63 }, cost: { tiny: 300e3, small: 1.5e6, narrow: 3e6, wide: 7e6, jumbo: 11e6 } },
 };
 export const CHECK_ORDER = ['A', 'B', 'C', 'D'];
 
 // Retrofits and modifications. `days` is aircraft downtime.
 export const UPGRADES = {
-  wifi: { minYear: 2008, name: 'Satellite Wi-Fi', desc: 'Connectivity lifts product quality and earns ancillary revenue.', cost: { small: 0.4e6, narrow: 0.6e6, wide: 1.2e6, jumbo: 1.5e6 }, days: 5, quality: 0.04, ancillary: 0.015 },
-  ife: { minYear: 1988, name: 'Seatback IFE', desc: 'Personal screens at every seat. Valued on long flights.', cost: { small: 0.6e6, narrow: 1.5e6, wide: 3.5e6, jumbo: 5e6 }, days: 10, quality: 0.05, longHaulOnly: true },
-  seats: { name: 'New-generation seats', desc: 'Modern slimline economy and refreshed premium seats.', cost: { small: 0.8e6, narrow: 2e6, wide: 6e6, jumbo: 9e6 }, days: 14, quality: 0.06 },
-  pip: { name: 'Engine performance kit', desc: 'Upgraded engine parts cut fuel burn by 2.5%.', cost: { small: 0.5e6, narrow: 1.5e6, wide: 3.5e6, jumbo: 5e6 }, days: 7, fuel: -0.025 },
-  aero: { minYear: 1985, name: 'Winglets / aero package', desc: 'Winglets and drag-reducing tweaks cut fuel burn by 1.5%.', cost: { small: 0.2e6, narrow: 0.6e6, wide: 1.5e6, jumbo: 2e6 }, days: 4, fuel: -0.015 },
+  wifi: { minYear: 2008, name: 'Satellite Wi-Fi', desc: 'Connectivity lifts product quality and earns ancillary revenue.', cost: { tiny: 100000, small: 0.4e6, narrow: 0.6e6, wide: 1.2e6, jumbo: 1.5e6 }, days: 5, quality: 0.04, ancillary: 0.015 },
+  ife: { minYear: 1988, name: 'Seatback IFE', desc: 'Personal screens at every seat. Valued on long flights.', cost: { tiny: 150000, small: 0.6e6, narrow: 1.5e6, wide: 3.5e6, jumbo: 5e6 }, days: 10, quality: 0.05, longHaulOnly: true },
+  seats: { name: 'New-generation seats', desc: 'Modern slimline economy and refreshed premium seats.', cost: { tiny: 200000, small: 0.8e6, narrow: 2e6, wide: 6e6, jumbo: 9e6 }, days: 14, quality: 0.06 },
+  pip: { name: 'Engine performance kit', desc: 'Upgraded engine parts cut fuel burn by 2.5%.', cost: { tiny: 125000, small: 0.5e6, narrow: 1.5e6, wide: 3.5e6, jumbo: 5e6 }, days: 7, fuel: -0.025 },
+  aero: { minYear: 1985, name: 'Winglets / aero package', desc: 'Winglets and drag-reducing tweaks cut fuel burn by 1.5%.', cost: { tiny: 50000, small: 0.2e6, narrow: 0.6e6, wide: 1.5e6, jumbo: 2e6 }, days: 4, fuel: -0.015 },
 };
 
 // Passenger-to-freighter conversions available for older airframes.
@@ -204,6 +248,6 @@ export const mroById = Object.fromEntries(MRO_PROVIDERS.map((m) => [m.id, m]));
 // Hangar facilities you can build at a hub.
 export const FACILITIES = {
   line: { name: 'Line maintenance station', desc: 'Do A and B checks in-house at this hub.', cost: 4e6, weeks: 8, checks: ['A', 'B'], bays: 4, engineers: 30 },
-  narrowHangar: { name: 'Narrowbody heavy hangar', desc: 'In-house C and D checks for regional and narrowbody aircraft.', cost: 28e6, weeks: 39, checks: ['C', 'D'], classes: ['small', 'narrow'], bays: 3, engineers: 120 },
-  wideHangar: { name: 'Widebody heavy hangar', desc: 'In-house C and D checks for every aircraft size.', cost: 65e6, weeks: 52, checks: ['C', 'D'], classes: ['small', 'narrow', 'wide', 'jumbo'], bays: 2, engineers: 200 },
+  narrowHangar: { name: 'Narrowbody heavy hangar', desc: 'In-house C and D checks for regional and narrowbody aircraft.', cost: 28e6, weeks: 39, checks: ['C', 'D'], classes: ['tiny', 'small', 'narrow'], bays: 3, engineers: 120 },
+  wideHangar: { name: 'Widebody heavy hangar', desc: 'In-house C and D checks for every aircraft size.', cost: 65e6, weeks: 52, checks: ['C', 'D'], classes: ['tiny', 'small', 'narrow', 'wide', 'jumbo'], bays: 2, engineers: 200 },
 };

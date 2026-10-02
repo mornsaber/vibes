@@ -14,6 +14,11 @@ export const ap = (code) => G.airportByCode[code];
 export const apName = (code) => `${ap(code).city} (${code})`;
 export const typeName = (id) => G.aircraftById[id]?.name ?? id;
 export const tonnes = (kg) => `${int(kg / 1000)} t`;
+// Engine amounts are constant 2027 dollars; show them in the current year's dollars.
+export const P = () => G.priceLevel();
+export const usd = (x, digits = 0) => (Number.isFinite(x) ? `$${(x * P()).toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits })}` : '–');
+export const nominal = (x) => Math.round(x * P());
+export const fromNominal = (v) => Number(v) / P();
 
 export function pill(text, kind = '') {
   return `<span class="pill ${kind}">${esc(text)}</span>`;
