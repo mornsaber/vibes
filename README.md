@@ -15,6 +15,11 @@ staffing, maintenance) is on by default; take the controls whenever you like.
 
 Runs entirely in the browser: no dependencies, no build step.
 
+**Play online:** https://mornsaber.github.io/vibes/ — published by
+`.github/workflows/pages.yml` on every push. On an iPad or phone, use
+*Share → Add to Home Screen* (Safari) or *Install app* (Chrome) and it opens
+full-screen like an app. Saves stay in that browser on that device.
+
 ```sh
 npm start        # http://localhost:8080
 npm test         # engine test suite (node:test)
@@ -88,6 +93,7 @@ src/engine/   core (rng, calendar), market, fleet, network, maintenance, staff,
               chronicle (history), scenarios, rivalai (reactive rivals), restructuring
               (Chapter 11), tutorial, turn (weekly turn, save migration)
 src/ui/       storage.js (save slots), app shell & router, map, shared components, pages/*
+icons/        app icons (icon.svg is the source; PNGs for home screens)
 scripts/      serve.js, simulate.js (balance), profile.js (performance), build-land.js (map data)
 test/         engine tests
 ```
