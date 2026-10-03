@@ -1810,3 +1810,17 @@ test('new route ideas for a selection, and opening a route with aircraft on it',
   assert.equal(G.openAndAssign(s, 'DEN', 'SYD', narrow.map((a) => a.id)).ok, false, 'out of range: not opened');
   assert.equal(s.routes.length, routes);
 });
+
+test('the airport list is complete and consistent, and new airports work as destinations', () => {
+  const codes = G.AIRPORTS.map((a) => a.code);
+  assert.ok(G.AIRPORTS.length >= 350);
+  assert.equal(new Set(codes).size, codes.length, 'no duplicate codes');
+  for (const a of G.AIRPORTS) {
+    assert.ok(G.COUNTRIES[a.country], `${a.code} country`);
+    assert.ok(G.REGIONS[a.region], `${a.code} region`);
+    assert.ok(Math.abs(a.lat) <= 90 && Math.abs(a.lon) <= 180 && a.pop > 0 && a.runway >= 500, `${a.code} values`);
+  }
+  const s = setup({ hub: 'IAD' });
+  for (const to of ['DSS', 'GLA', 'TAS']) assert.ok(G.openRoute(s, 'IAD', to).ok, to);
+  assert.ok(G.sameMarket('RO', 'FR', 2027), 'newer EU members share the single market');
+});

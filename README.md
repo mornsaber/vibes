@@ -1,7 +1,7 @@
 # ✈ Airline Executive Simulator
 
 A deep, turn-based airline management sim. Found an airline in any year from
-1960 at one of 165 real airports, build a fleet from 120 aircraft types (Islander
+1960 at one of 365 real airports, build a fleet from 120 aircraft types (Islander
 and Twin Otter to A350, Concorde included) with realistic production years and lead times, plan a
 hub-and-spoke network, run engineering, crew, safety and finance, and fight
 100+ real and generated airlines — all while the board judges you every quarter.
