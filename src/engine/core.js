@@ -55,7 +55,10 @@ export const monthKey = (week) => {
 export const monthLabel = (key) => `${MONTHS[key % 12]} ${Math.floor(key / 12)}`;
 export const quarterKey = (week) => Math.floor(monthKey(week) / 3);
 export const quarterLabel = (key) => `Q${(key % 4) + 1} ${Math.floor(key / 4)}`;
-export const yearOf = (week) => dateOf(week).getUTCFullYear();
+// Called constantly with the same week: remember the last answer.
+let yearWeek = NaN;
+let yearValue = 0;
+export const yearOf = (week) => (week === yearWeek ? yearValue : ((yearWeek = week), (yearValue = dateOf(week).getUTCFullYear())));
 export const dayOfYear = (week) => {
   const d = dateOf(week);
   return Math.floor((d - Date.UTC(d.getUTCFullYear(), 0, 1)) / DAY);

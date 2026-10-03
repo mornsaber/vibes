@@ -6,12 +6,12 @@ import { airportByCode, AIRPORTS } from '../data/airports.js';
 import { AIRCRAFT, aircraftById, seatCount, inProduction, inService, CLASSES, familyOf } from '../data/aircraft.js';
 import { clamp, sum, distanceKm, pairKey, yearOf, ok, fail } from './core.js';
 import {
-  marketNow, classShares, rivalsOn, rivalsContext, rivalAppeal, OUTSIDE_OPTION, fareNow, trafficRights, sameMarket,
+  marketNow, classShares, rivalsOn, rivalsContext, rivalAppeal, OUTSIDE_OPTION, fareNow, trafficRights, sameMarket, localCompetition,
 } from './market.js';
 import { typeOf, isDelivered, monthlyLeaseRate, weeklyFromMonthly, isFreighter, fleetFamilies, FAMILY_OVERHEAD } from './fleet.js';
 import {
   blockHours, roundTripHours, weeklyHours, availableHours, scheduledHours, canOperate, maxFrequency, routeFreq, entryFreq,
-  openRoute, noiseBanned, routeById, routeCapacity,
+  openRoute, noiseBanned, routeById, plannedCapacity,
 } from './network.js';
 import { MX_HR, NAV_KM, LANDING, serviceAppeal, marketingEffect } from './ops.js';
 import { weeklySalary, cockpitCrew, cabinCrewPerFlight, PILOT_HOURS, CABIN_HOURS, RESERVE } from './staff.js';
@@ -26,12 +26,30 @@ const AGE_MX = 1.15; // a typical mid-life airframe
 
 // Weekly passengers (both directions) you'd likely win on a market at
 // reference fares with `freq` weekly round trips, and their average fare.
+// Derived, never saved: one rival context and capture estimates per week.
+// Estimates feed display and the autopilot's start-of-turn decisions only, so a
+// rival change later in the same week can't make a reloaded game diverge.
+const estCache = new WeakMap();
+function estimates(state) {
+  let c = estCache.get(state);
+  if (!c || c.week !== state.week) estCache.set(state, (c = { week: state.week, ctx: rivalsContext(state), map: new Map() }));
+  return c;
+}
+
 export function estimateCapture(state, a, b, freq = 7) {
+  const c = estimates(state);
+  const key = `${a}|${b}|${freq}|${state.reputation.toFixed(2)}|${state.marketing}`;
+  let hit = c.map.get(key);
+  if (!hit) c.map.set(key, (hit = estimateCaptureUncached(state, a, b, freq, c.ctx)));
+  return hit;
+}
+
+function estimateCaptureUncached(state, a, b, freq, ctx) {
   const d = distanceKm(a, b);
   const A = airportByCode[a];
   const B = airportByCode[b];
   const biz = (A.biz + B.biz) / 2;
-  const rivals = rivalsOn(state, a, b, rivalsContext(state, { memo: false }));
+  const rivals = rivalsOn(state, a, b, ctx);
   const shares = classShares(a, b);
   const market = marketNow(state, a, b);
   const fe = clamp(0.35 + 0.65 * Math.sqrt(freq / 14), 0.35, 1.5);
@@ -39,7 +57,7 @@ export function estimateCapture(state, a, b, freq = 7) {
   let pax = 0;
   let revenue = 0;
   for (const k of ['J', 'Y']) {
-    const theirs = sum(rivals, (r) => rivalAppeal(state, r, k, biz)) + (d > 3000 ? 0.25 : 0.1);
+    const theirs = sum(rivals, (r) => rivalAppeal(state, r, k, biz)) + (d > 3000 ? 0.25 : 0.1) + localCompetition(state, a, b, k, ctx);
     const share = ours / (ours + theirs + OUTSIDE_OPTION[k]);
     const p = market * (k === 'Y' ? shares.Y + shares.W : shares.J + shares.F) * share * 2;
     pax += p;
@@ -78,7 +96,7 @@ export function tripEconomics(state, type, { a, b, distance }, { freq, demand, f
   const costs = {
     fuel,
     maintenance: hours * MX_HR[type.mx] * AGE_MX,
-    airport: flights * LANDING[type.mx] * fee + pax * ((9 + (intl ? 12 : 0)) * fee + (year >= 2002 ? 6 : year >= 1990 ? 2 : 0)) + pax * (hubEnds === 2 ? 3 : hubEnds === 1 ? 6 : 9),
+    airport: flights * LANDING[type.mx] * fee + pax * ((6.5 + (intl ? 10 : 0)) * fee + (year >= 2002 ? 5 : year >= 1990 ? 2 : 0)) + pax * (hubEnds === 2 ? 2.5 : hubEnds === 1 ? 4.5 : 7),
     navigation: flights * d * NAV_KM[type.mx],
     service: pax * (svcHour * bh + svcPax),
     distribution: ticket * eraDistribution(year),
@@ -105,7 +123,7 @@ function routeOpportunity(state, route, freq) {
   // Not flown yet (or no results yet): estimated capture less seats already scheduled.
   const total = routeFreq(state, route) + freq;
   const est = estimateCapture(state, route.a, route.b, total);
-  const cap = routeCapacity(state, route);
+  const cap = plannedCapacity(state, route);
   const scheduled = (cap.F + cap.J + cap.W + cap.Y) * 2 * 0.85;
   return { demand: Math.max(0, est.pax - scheduled), fare: est.fare };
 }

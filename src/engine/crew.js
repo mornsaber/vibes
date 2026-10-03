@@ -40,15 +40,17 @@ export const crewBaseCodes = (state) => [...new Set([...state.hubs.map((h) => h.
 export const isCrewBase = (state, code) => isHub(state, code) || (state.crewBases ?? []).some((b) => b.code === code);
 
 // Where a route's crews come from, their pay relative to home, and whether they are positioned in.
-// Derived, never saved: route → base, valid while hubs and bases are unchanged.
+// Derived, never saved: route → base, valid while hubs and bases are unchanged
+// (both lists only ever grow or shrink, so identity plus length is enough).
 const baseCache = new WeakMap();
 export function routeBase(state, route) {
-  const key = `${state.hubs.map((h) => h.code).join()}|${(state.crewBases ?? []).map((b) => b.code).join()}`;
+  const bases = state.crewBases ?? [];
   let c = baseCache.get(state);
-  if (!c || c.key !== key) baseCache.set(state, (c = { key, map: new Map() }));
-  const k = `${route.a}|${route.b}`;
-  let hit = c.map.get(k);
-  if (!hit) c.map.set(k, (hit = computeRouteBase(state, route)));
+  if (!c || c.hubs !== state.hubs || c.hubCount !== state.hubs.length || c.bases !== bases || c.baseCount !== bases.length) {
+    baseCache.set(state, (c = { hubs: state.hubs, hubCount: state.hubs.length, bases, baseCount: bases.length, map: new Map() }));
+  }
+  let hit = c.map.get(route.id);
+  if (!hit) c.map.set(route.id, (hit = computeRouteBase(state, route)));
   return hit;
 }
 

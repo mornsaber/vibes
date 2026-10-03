@@ -1,7 +1,7 @@
 // Homepage: KPIs, monthly profit, issues needing attention, operations,
 // fleet by type, network, staffing and upcoming deliveries.
 
-import { G, esc, money, pct, int, kpi, panel, barChart, hbars, pill, ap, typeName, tonnes } from '../util.js';
+import { G, esc, money, pct, int, kpi, panel, barChart, hbars, pill, ap, typeName, tonnes, signed, bar } from '../util.js';
 import { worldMap } from '../map.js';
 
 // Everything the CEO should look at, most severe first.
@@ -51,6 +51,41 @@ export function issues(s) {
   return out.sort((a, b) => order[a.level] - order[b.level]);
 }
 
+// The headline of the week: records and milestones first, then good or bad news.
+function headline(s) {
+  const week = s.log.filter((l) => l.week === s.week);
+  const rank = (l) => (l.category === 'record' ? 0 : l.category === 'history' ? 1 : l.tone === 'good' ? 2 : l.tone === 'bad' ? 3 : 4);
+  return week.sort((a, b) => rank(a) - rank(b))[0] ?? null;
+}
+
+const delta = (now, prev, fmt) => {
+  if (prev == null || !Number.isFinite(prev) || prev === 0 || now === prev) return '';
+  const up = now > prev;
+  const d = Math.abs((now - prev) / Math.abs(prev));
+  return ` <small class="${up ? 'good' : 'bad'}">${up ? '▲' : '▼'} ${fmt ? fmt(Math.abs(now - prev)) : pct(Math.min(9.99, d))}</small>`;
+};
+
+function weekRecap(s) {
+  const h = s.history;
+  if (h.length < 2) return '';
+  const [prev, now] = h.slice(-2);
+  const top = headline(s);
+  const goals = G.nextGoals(s, 3);
+  const board = G.leaderboard(s);
+  const me = board.find((r) => r.you);
+  const next = board[me.rank - 2];
+  return `<section class="panel recap">
+    ${top ? `<div class="headline ${top.tone}"><span class="paper">📰</span> ${esc(top.text)}</div>` : ''}
+    <div class="recap-grid">
+      <div><label>Profit this week</label><b class="${now.profit < 0 ? 'bad' : 'good'}">${signed(now.profit)}</b>${delta(now.profit, prev.profit, money)}</div>
+      <div><label>Passengers</label><b>${int(now.pax)}</b>${delta(now.pax, prev.pax)}</div>
+      <div><label>Load factor</label><b>${pct(now.lf)}</b>${delta(now.lf, prev.lf, (x) => `${(x * 100).toFixed(1)} pts`)}</div>
+      <div><label>At home</label><b>#${me.rank}</b> <small class="muted">of ${board.length}</small>${next ? `<small class="muted block">next: ${esc(next.name)} (${int(next.pax - me.pax)} more pax/wk)</small>` : '<small class="good block">Number one!</small>'}</div>
+    </div>
+    ${goals.length ? `<div class="goals">${goals.map((g) => `<div class="goal"><span>🎯 ${esc(g.label)}</span>${bar(g.progress * 100, 100)}</div>`).join('')}<a href="#history/timeline" class="small">All goals ›</a></div>` : ''}
+  </section>`;
+}
+
 export function render({ state: s }) {
   const r = s.lastReport;
   const months = Object.entries(s.months).sort((a, b) => a[0] - b[0]).slice(-18);
@@ -74,6 +109,7 @@ export function render({ state: s }) {
     ${kpi('Load factor', r ? pct(r.lf) : '–', { href: '#routes', sub: `${int(r?.pax ?? 0)} pax last week` })}
     ${kpi('Fleet', String(s.fleet.length), { href: '#fleet', sub: `${s.orders.length} on order` })}
   </div>
+  ${weekRecap(s)}
   ${s.scenario ? scenarioPanel(s) : ''}
   <div class="grid cols-2">
     ${panel('Monthly profit', barChart(monthly, { href: '#finances' }), { href: '#finances' })}

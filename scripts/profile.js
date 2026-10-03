@@ -25,6 +25,8 @@ export function bigAirline({ seed = 7, aircraft = 300, routes = 150 } = {}) {
     const monthly = G.monthlyLeaseRate(s, G.aircraftById[type], 3);
     G.makeAircraft(s, type, { owned: false, ageWeeks: 156, lease: { lessor: 'P', monthly, startWeek: s.week, endWeek: s.week + 1040, deposit: 0 } });
   }
+  // Keep the network fixed so timings compare across versions (set PROFILE_NETWORK=1 to let the autopilot expand it).
+  G.setAutopilot(s, { network: !!process.env.PROFILE_NETWORK });
   // Staff up for the operation before the clock starts.
   for (const r of G.ROLE_IDS) s.staffAuto[r] = true;
   return s;
@@ -46,6 +48,7 @@ const sorted = [...times].sort((a, b) => a - b);
 const pct = (p) => sorted[Math.floor((sorted.length - 1) * p)].toFixed(1);
 const json = JSON.stringify(s);
 console.log(`setup ${setup.toFixed(0)} ms · ${s.fleet.length} aircraft · ${s.routes.length} routes · ${s.hubs.length} hubs · status ${s.status}`);
+console.log(`end: ${s.fleet.length} aircraft · ${s.routes.length} routes · ${Math.round(s.history.slice(-52).reduce((a, h) => a + h.flights, 0) / 52)} flights/wk · ${Math.round(s.history.slice(-52).reduce((a, h) => a + h.pax, 0) / 52)} pax/wk`);
 console.log(`weekly turn ms: median ${pct(0.5)} · p90 ${pct(0.9)} · max ${pct(1)} · total ${(times.reduce((a, b) => a + b, 0) / 1000).toFixed(1)} s over ${times.length} weeks`);
 console.log(`save size ${(json.length / 1e6).toFixed(2)} MB · history ${s.history.length} · log ${s.log.length} · shareHistory ${s.shareHistory?.length} · months ${Object.keys(s.months).length} · route hist ${s.routes.reduce((t, r) => t + (r.hist?.length ?? 0), 0)} · incidents ${s.incidents.length} · mxLog ${s.fleet.reduce((t, a) => t + (a.mxLog?.length ?? 0), 0)}`);
 const parts = Object.entries(s).map(([k, v]) => [k, JSON.stringify(v)?.length ?? 0]).sort((a, b) => b[1] - a[1]).slice(0, 8);

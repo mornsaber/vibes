@@ -65,6 +65,7 @@ export function render(c) {
       <p class="muted small">Aircraft-secured loans (80% of value, 12 years, cheaper) are raised from each owned aircraft's page.</p>
     </div>`)}
   </div>
+  ${balanceSheetPanel(s)}
   ${panel('Loans', table(s.loans, [
     { h: 'Facility', v: (l) => ({ term: 'Term loan', secured: `Secured · ${s.fleet.find((a) => a.id === l.aircraftId)?.reg ?? ''}`, rcf: 'Revolving credit', dip: 'DIP loan (Chapter 11)' })[l.kind] + (G.frozenDebt(s, l) ? ' <small class="warn">frozen</small>' : '') },
     { h: 'Original', cls: 'num', v: (l) => money(l.original) },
@@ -103,6 +104,17 @@ export function render(c) {
     <div class="row" data-form><input type="number" name="amount" value="${Math.round(nominal(25e6) / 1e5) * 1e5}" step="100000" class="w-140"><button data-action="issue-shares">Issue shares</button><button data-action="dividend">Pay dividend</button></div>
     <p class="muted small">Issuing shares raises cash at a 8% discount but annoys the board; dividends please it.</p>`)}
   </div>`;
+}
+
+function balanceSheetPanel(s) {
+  const b = G.balanceSheet(s);
+  const rows = (list) => list.filter(([, v]) => v > 0.5).map(([k, v]) => [`<span class="muted">${esc(k)}</span>`, money(v)]);
+  return panel('Balance sheet', `<div class="grid cols-2">
+    <div>${statement([...rows(b.assets), ['Total assets', money(b.totalAssets), 'total']])}</div>
+    <div>${statement([...rows(b.liabilities), ['Total liabilities', money(b.totalLiabilities), 'total'], ['Equity', signed(b.equity), 'total']])}</div>
+  </div>
+  ${b.commitments.some(([, v]) => v > 0) ? `<h3>Commitments (not on the balance sheet)</h3>${statement(rows(b.commitments))}` : ''}
+  <p class="muted small">Owned aircraft are valued at today's market price. Miles owed to members are what outstanding frequent-flyer miles would cost to honour; pre-sold miles are cash the bank has already paid for miles you still owe, and count as debt in your credit rating.</p>`);
 }
 
 // Chapter 11: offer when distressed; the toolkit while under protection.

@@ -179,7 +179,7 @@ export function render() {
       </div>
       ${tutorialCard(g)}
     </div>`;
-  modalRoot.innerHTML = renderModal(g);
+  modalRoot.innerHTML = renderModal(g) || (g.pendingEvent ? '' : renderCelebration());
   mod.after?.({ ...ctx, state: g, params });
   if (keepScroll) window.scrollTo(0, y);
   else window.scrollTo(0, 0);
@@ -228,7 +228,18 @@ function badge(key) {
   return n ? `<span class="badge">${n}</span>` : '';
 }
 
+// A brief up/down flash on top-bar numbers that moved since the last turn.
+function flashes(g) {
+  const r = g.lastReport;
+  const now = { week: g.week, cash: g.cash, profit: r?.profit ?? 0, lf: r?.lf ?? 0, fleet: g.fleet.length };
+  const prev = ctx.ui.topPrev;
+  if (!prev || prev.week !== now.week) ctx.ui.topFlash = prev && prev.week < now.week ? Object.fromEntries(['cash', 'profit', 'lf', 'fleet'].map((k) => [k, now[k] > prev[k] * (1 + 1e-6) + 1e-9 ? 'flash-up' : now[k] < prev[k] - 1e-9 ? 'flash-down' : ''])) : {};
+  if (!prev || prev.week !== now.week) ctx.ui.topPrev = now;
+  return ctx.ui.topFlash ?? {};
+}
+
 function renderTopbar(g) {
+  const f = flashes(g);
   const r = g.lastReport;
   const playing = g.status === 'playing';
   const blocked = !playing || !!g.pendingEvent;
@@ -237,10 +248,10 @@ function renderTopbar(g) {
     <button class="icon-btn nav-toggle" data-action="toggle-nav" aria-label="Menu">☰</button>
     <div class="date"><b>${G.dateLabel(g.week)}</b><small>${esc(G.eraOf(G.yearOf(g.week)).name)} · ${G.quarterLabel(G.quarterKey(g.week))}</small></div>
     <div class="stats">
-      <a class="stat" href="#finances"><label>${tipLabel('Cash')}</label><b class="${g.cash < 0 ? 'bad' : ''}">${money(g.cash)}</b></a>
-      <a class="stat" href="#finances"><label>${tipLabel('Profit/wk')}</label><b class="${(r?.profit ?? 0) < 0 ? 'bad' : 'good'}">${money(r?.profit ?? 0)}</b></a>
-      <a class="stat" href="#routes"><label>${tipLabel('Load')}</label><b>${r ? pct(r.lf) : '–'}</b></a>
-      <a class="stat" href="#fleet"><label>Fleet</label><b>${g.fleet.length}</b></a>
+      <a class="stat" href="#finances"><label>${tipLabel('Cash')}</label><b class="${g.cash < 0 ? 'bad' : ''} ${f.cash ?? ''}">${money(g.cash)}</b></a>
+      <a class="stat" href="#finances"><label>${tipLabel('Profit/wk')}</label><b class="${(r?.profit ?? 0) < 0 ? 'bad' : 'good'} ${f.profit ?? ''}">${money(r?.profit ?? 0)}</b></a>
+      <a class="stat" href="#routes"><label>${tipLabel('Load')}</label><b class="${f.lf ?? ''}">${r ? pct(r.lf) : '–'}</b></a>
+      <a class="stat" href="#fleet"><label>Fleet</label><b class="${f.fleet ?? ''}">${g.fleet.length}</b></a>
       <a class="stat hide-sm" href="#finances"><label>${tipLabel('Rating')}</label><b>${g.finance.rating}</b></a>
       <a class="stat hide-sm" href="#management/airline"><label>${tipLabel('Board')}</label><b class="${g.board.confidence < 25 ? 'bad' : ''}">${Math.round(g.board.confidence)}</b></a>
     </div>
@@ -330,10 +341,36 @@ export function formValues(el) {
   return out;
 }
 
+// Milestones and records reached during a time advance get a moment of glory.
+function celebrate(before) {
+  const g = ctx.game;
+  const items = [];
+  for (const m of (g.milestones ?? []).slice(before.milestones)) if (m.tone !== 'bad') items.push({ icon: '🏆', text: m.label });
+  for (const l of g.log) {
+    if (l.week <= before.week) break;
+    if (l.category === 'record') items.push({ icon: l.text.startsWith('New record') ? '📈' : '🥇', text: l.text });
+  }
+  if (items.length) ctx.ui.celebrate = items.slice(0, 5);
+}
+
+function renderCelebration() {
+  const items = ctx.ui.celebrate;
+  if (!items?.length) return '';
+  const confetti = Array.from({ length: 28 }, (_, i) => `<i style="left:${(i * 37) % 100}%;animation-delay:${(i % 7) * 0.08}s;background:hsl(${(i * 47) % 360} 85% 60%)"></i>`).join('');
+  return `<div class="celebrate" role="dialog" aria-label="Achievement"><div class="confetti">${confetti}</div>
+    <div class="celebrate-card"><h2>${items.length > 1 ? 'Big week!' : 'Well done!'}</h2>
+    <ul>${items.map((x) => `<li><span class="big">${x.icon}</span> ${esc(x.text)}</li>`).join('')}</ul>
+    <div class="row"><button class="primary" data-action="dismiss-celebrate">Onwards ✈</button><a href="#history/timeline" class="small">Trophy cabinet ›</a></div></div></div>`;
+}
+
 const GLOBAL_ACTIONS = {
+  'dismiss-celebrate': () => ((ctx.ui.celebrate = null), { skipRender: false }),
   advance(el) {
     if (el.dataset.unit !== 'continue') takeSnapshot();
+    ctx.ui.celebrate = null;
+    const before = { milestones: (ctx.game.milestones ?? []).length, week: ctx.game.week };
     const res = G.advance(ctx.game, el.dataset.unit);
+    celebrate(before);
     if (res.ok && ctx.game.pendingEvent) return res;
     if (res.ok && res.ran > 1 && !ctx.game.pendingEvent) toast(`Advanced ${res.ran} weeks.`, 'info');
     return res;
@@ -494,6 +531,7 @@ document.addEventListener('keydown', (e) => {
 
 window.addEventListener('hashchange', () => {
   ctx.ui.navOpen = false;
+  ctx.ui.celebrate = null;
   render();
 });
 

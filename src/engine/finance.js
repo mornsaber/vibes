@@ -5,6 +5,7 @@ import { RATINGS, RATING_SPREAD } from '../data/business.js';
 import { clamp, fail, ok, newId, log, money, cents, sum } from './core.js';
 import { typeOf, aircraftValue, isDelivered, weeklyFromMonthly } from './fleet.js';
 import { frozenDebt, ch11Blocked, inChapter11 } from './restructuring.js';
+import { loyaltyLiability, cardWeekly, PRESALE_DISCOUNT } from './commercial.js';
 
 // ---------------------------------------------------------------------------
 // Fuel hedging
@@ -160,7 +161,7 @@ export function creditMetrics(state) {
   const ebitda = annualEbitda(state);
   const leasesAnnual = leaseCommitmentWeekly(state) * 52;
   const ebitdar = ebitda + leasesAnnual;
-  const debt = totalDebt(state);
+  const debt = totalDebt(state) + presoldMiles(state);
   const leverage = ebitdar > 0 ? (debt + leasesAnnual * 5 - Math.max(0, state.cash)) / ebitdar : Infinity;
   const h = state.history.slice(-8);
   const burn = h.length ? sum(h, (x) => x.cashCost) / h.length : 1;
@@ -223,8 +224,42 @@ export function quarterlyTax(state, pretax) {
 
 export const ownedFleetValue = (state) => sum(state.fleet.filter((a) => a.owned), (a) => aircraftValue(state, a));
 
+// Pre-sold card miles are borrowing against the loyalty programme: cash now,
+// miles to deliver later. Rating agencies treat them as debt.
+export const presoldMiles = (state) => (state.loyalty?.presold ? state.loyalty.presold * cardWeekly(state) * (1 - PRESALE_DISCOUNT) : 0);
+
+// Balance sheet (owned aircraft at market value). Operating leases and the
+// unpaid balance of factory orders are commitments shown below the line.
+export function balanceSheet(state) {
+  const debt = (kind) => sum(state.loans.filter((l) => l.kind === kind), (l) => l.principal);
+  const assets = [
+    ['Cash', Math.max(0, state.cash)],
+    ['Owned aircraft (market value)', ownedFleetValue(state)],
+    ['Pre-delivery deposits', sum(state.orders, (o) => o.paid)],
+    ['Lease deposits', sum(state.fleet.filter((a) => !a.owned && a.lease), (a) => a.lease.deposit ?? 0)],
+    ['Facilities & terminals', state.finance.facilityValue],
+  ];
+  const liabilities = [
+    ['Overdraft', Math.max(0, -state.cash)],
+    ['Term loans', debt('term')],
+    ['Aircraft-secured loans', debt('secured')],
+    ['Revolving credit', debt('rcf')],
+    ['DIP loan', debt('dip')],
+    ['Miles owed to members', loyaltyLiability(state)],
+    ['Pre-sold miles (deferred revenue)', presoldMiles(state)],
+  ];
+  const total = (list) => sum(list, (x) => x[1]);
+  const leaseWeekly = leaseCommitmentWeekly(state);
+  const leaseWeeks = sum(state.fleet.filter((a) => !a.owned && a.lease), (a) => weeklyFromMonthly(a.lease.monthly) * Math.max(0, a.lease.endWeek - state.week));
+  const commitments = [
+    ['Remaining lease rent', leaseWeeks],
+    ['Aircraft on order (balance due)', sum(state.orders, (o) => o.price - o.paid)],
+  ];
+  return { assets, liabilities, commitments, totalAssets: total(assets), totalLiabilities: total(liabilities), equity: total(assets) - total(liabilities), leaseWeekly };
+}
+
 export function bookEquity(state) {
-  return state.cash + ownedFleetValue(state) + state.finance.facilityValue - totalDebt(state);
+  return balanceSheet(state).equity;
 }
 
 export function marketCap(state) {

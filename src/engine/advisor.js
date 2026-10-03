@@ -3,15 +3,16 @@
 // idle aircraft, and route suggestions the CEO can apply with one click.
 
 import { CLASSES } from '../data/aircraft.js';
-import { clamp, sum, ok, fail, log } from './core.js';
+import { clamp, sum, ok, fail, log, money } from './core.js';
 import { fareNow, DEFAULT_RM } from './market.js';
 import { brandOf, brandKind } from './brands.js';
+import { routesForAircraft } from './fit.js';
 import { typeOf, isDelivered, isFreighter } from './fleet.js';
 import {
-  canOperate, maxFrequency, setFrequency, routeFreq, routeById, entryFreq, closeRoute, scheduledHours, availableHours, seasonOf, setSchedule, roundTripHours, scheduleVersion, slotInfo,
+  canOperate, maxFrequency, setFrequency, routeFreq, openRoute, routeOpenCost, routeById, entryFreq, closeRoute, scheduledHours, availableHours, seasonOf, setSchedule, roundTripHours, scheduleVersion, slotInfo,
 } from './network.js';
 
-export const defaultAutopilot = () => ({ pricing: true, rm: true, fleet: true, targetLF: 0.84 });
+export const defaultAutopilot = () => ({ pricing: true, rm: true, fleet: true, network: true, targetLF: 0.84 });
 // Autopilot fare range as a multiple of the brand's normal price level: it won't
 // dump fares to fill seats that shouldn't be flown (that's a capacity problem).
 export const PRICE_RANGE = [0.8, 1.6];
@@ -77,7 +78,80 @@ export function autoAssign(state, ac, r, freq, current = 0) {
   return setFrequency(state, ac.id, r.id, current + n, { autoSlots: ends.some((e) => n > e.room) });
 }
 
-// Weekly: put idle aircraft to work on the routes with the most unmet demand.
+// Routes worth flying for an aircraft, best first: estimated weekly result with
+// the frequency sized to demand. Falls back to unmet demand when there is no
+// estimate (no rival data or results yet).
+function autoCandidates(state, ac) {
+  if (isFreighter(typeOf(ac))) {
+    return state.routes.map((r) => ({ r, score: needScore(state, ac, r) })).filter((x) => x.score > 0).sort((a, b) => b.score - a.score).slice(0, 5)
+      .map(({ r }) => ({ r, freq: Math.min(maxFrequency(state, ac, r), 7) }));
+  }
+  return routesForAircraft(state, ac, { includeNew: false, limit: 8 })
+    .filter((e) => e.profit + (e.costs?.ownership ?? 0) > 0 && e.freq >= 1)
+    .slice(0, 5)
+    .map((e) => ({ r: routeById(state, e.routeId), freq: Math.max(Math.min(3, maxFrequency(state, ac, routeById(state, e.routeId))), e.freq) }))
+    .filter((x) => x.r && x.freq >= 1);
+}
+
+// An idle aircraft with nowhere worth flying: open the most promising new route
+// for it (at most one a month, and only with a cash cushion).
+function autoExpand(state, ac) {
+  const ap = state.autopilot;
+  if (!ap?.network || isFreighter(typeOf(ac)) || !isDelivered(state, ac)) return false;
+  if (ap.lastOpened != null && state.week - ap.lastOpened < 4) return false;
+  // Scanning every airport is expensive: at most one scan a month for the whole airline.
+  if (ap.lastScan != null && state.week - ap.lastScan < 4) return false;
+  if (state.cash < 25e6) return false;
+  ap.lastScan = state.week;
+  const ideas = routesForAircraft(state, ac, { includeNew: true, limit: 6 }).filter((e) => e.kind === 'new' && e.profit > 0);
+  for (const e of ideas) {
+    // Skip airports where the slots couldn't be had.
+    const blocked = [e.a, e.b].some((code) => {
+      const i = slotInfo(state, code);
+      return i && i.held - i.used + i.pool < 3;
+    });
+    if (blocked || state.cash < 25e6 + routeOpenCost(state, e.a, e.b) * 3) continue;
+    const res = openRoute(state, e.a, e.b);
+    if (!res.ok) continue;
+    if (!autoAssign(state, ac, res.route, Math.max(3, e.freq)).ok) {
+      closeRoute(state, res.route.id);
+      continue;
+    }
+    ap.lastOpened = state.week;
+    log(state, `Autopilot: opened ${e.a}–${e.b} for idle ${ac.reg} (${entryFreq(ac, res.route.id)}×/wk, about ${money(e.profit)} a week expected).`, 'good', 'network');
+    return true;
+  }
+  return false;
+}
+
+// Monthly: trim frequencies on routes that run badly empty even at floor fares,
+// freeing aircraft for routes that need them.
+export function autoTrim(state) {
+  if (!state.autopilot?.fleet) return [];
+  const done = [];
+  for (const r of state.routes) {
+    if (r.autoPrice === false || !r.last?.seatTotal) continue;
+    const recent = (r.hist ?? []).slice(-4);
+    if (recent.length < 4 || recent.some((h) => h.lf >= 0.55)) continue;
+    const level = brandKind(brandOf(state, r)).fareIdx ?? 1;
+    if (priceIdx(state, r) > PRICE_RANGE[0] * level * 1.03) continue; // pricing hasn't run out of room yet
+    const total = routeFreq(state, r);
+    if (total <= 3) continue;
+    // Cut the biggest rotation by about a quarter, keeping a minimum service.
+    const entries = state.fleet.flatMap((ac) => ac.schedule.filter((e) => e.routeId === r.id && !e.season).map((e) => ({ ac, e }))).sort((x, y) => y.e.freq - x.e.freq);
+    const top = entries[0];
+    if (!top) continue;
+    const cut = Math.min(top.e.freq - 1, Math.max(1, Math.round(total * 0.25)), total - 3);
+    if (cut < 1) continue;
+    const res = setFrequency(state, top.ac.id, r.id, top.e.freq - cut);
+    if (!res.ok) continue;
+    done.push({ route: `${r.a}–${r.b}`, cut });
+    log(state, `Autopilot: ${r.a}–${r.b} has run below 55% full for a month even at floor fares — cut ${cut} weekly flight${cut > 1 ? 's' : ''}.`, 'info', 'network');
+  }
+  return done;
+}
+
+// Weekly: put idle aircraft to work on the routes with the best prospects.
 export function autoFleet(state) {
   if (!state.autopilot?.fleet) return [];
   const done = [];
@@ -87,20 +161,18 @@ export function autoFleet(state) {
     // (Kept on the aircraft so a reloaded save behaves identically.)
     const miss = ac.autoMiss;
     if (miss && miss.routes === state.routes.length && state.week - miss.week < 4) continue;
-    const ranked = state.routes.map((r) => ({ r, score: needScore(state, ac, r) })).filter((x) => x.score > 0).sort((a, b) => b.score - a.score);
     let placed = false;
-    // Try the neediest routes in turn (a slot-constrained one may not fit).
-    for (const { r } of ranked.slice(0, 5)) {
-      // Fill the shortfall but stay sensible: a daily-ish rotation, or whatever the aircraft can do.
-      const want = !routeFreq(state, r) ? 14 : Math.max(3, Math.ceil(spill(r) / 2 / Math.max(1, sum(CLASSES, (c) => ac.config[c] || 0) * 0.85)));
-      const freq = Math.min(maxFrequency(state, ac, r), want);
-      if (freq < 1 || !autoAssign(state, ac, r, freq).ok) continue;
+    // Best estimated result first, at a frequency sized to demand. A route that
+    // covers its flying costs beats sitting idle (the lease is paid either way).
+    for (const { r, freq } of autoCandidates(state, ac)) {
+      if (!autoAssign(state, ac, r, freq).ok) continue;
       const got = entryFreq(ac, r.id);
       done.push({ ac: ac.reg, route: `${r.a}–${r.b}`, freq: got });
       log(state, `Autopilot: ${ac.reg} assigned to ${r.a}–${r.b} (${got}×/wk).`, 'info', 'network');
       placed = true;
       break;
     }
+    if (!placed && autoExpand(state, ac)) placed = true;
     if (placed) delete ac.autoMiss;
     else ac.autoMiss = { routes: state.routes.length, week: state.week };
   }
@@ -127,6 +199,32 @@ export function autoFleet(state) {
       log(state, `Autopilot: moved ${ac.reg} from half-empty ${from.a}–${from.b} to unserved ${to.a}–${to.b}.`, 'info', 'network');
       break;
     }
+  }
+  // Aircraft with a lot of unused time take on a second profitable route
+  // (a handful of searches a week; the rest wait their turn).
+  let searches = 8;
+  for (const ac of state.fleet) {
+    if (searches <= 0) break;
+    if (ac.schedule.length !== 1 || ac.contractHours || !isDelivered(state, ac) || isFreighter(typeOf(ac))) continue;
+    const spare = availableHours(state, ac) - scheduledHours(state, ac);
+    if (spare < 20) continue;
+    // Looked recently and found nothing: retry monthly or when the network changes (kept on the aircraft).
+    const tried = ac.autoSpare;
+    if (tried && tried.routes === state.routes.length && state.week - tried.week < 4) continue;
+    let added = false;
+    searches -= 1;
+    for (const { r, freq } of autoCandidates(state, ac)) {
+      if (ac.schedule.some((e) => e.routeId === r.id) || freq < 3) continue;
+      if (!autoAssign(state, ac, r, freq).ok) continue;
+      done.push({ ac: ac.reg, route: `${r.a}–${r.b}`, freq: entryFreq(ac, r.id) });
+      log(state, `Autopilot: ${ac.reg} adds ${r.a}–${r.b} (${entryFreq(ac, r.id)}×/wk) with its spare hours.`, 'info', 'network');
+      added = true;
+      break;
+    }
+    // Nothing worth adding on existing routes: maybe a new one (same limits as for idle aircraft).
+    if (!added && spare >= 30) added = autoExpand(state, ac);
+    if (added) delete ac.autoSpare;
+    else ac.autoSpare = { routes: state.routes.length, week: state.week };
   }
   // Second pass: aircraft with lots of spare hours top up their own spilling routes.
   for (const ac of state.fleet) {

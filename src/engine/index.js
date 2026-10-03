@@ -26,7 +26,7 @@ export * from './crew.js';
 export { GLOSSARY, explain } from '../data/glossary.js';
 export { aircraftById, AIRCRAFT, CLASSES, CABIN, CHECKS, CHECK_ORDER, UPGRADES, FACILITIES, MRO_PROVIDERS, mroById, CATEGORY_LABELS, CONVERSIONS, cabinUnits, seatCount, SEAT_PRODUCTS, seatProducts, defaultCabin, seatUnits, productQ, canCombi, COMBI_UNITS_PER_T, cabinGroup, FAMILIES, familyOf, ENGINES, engineOptions, engineOf } from '../data/aircraft.js';
 export { AIRPORTS, airportByCode, COUNTRIES, REGIONS } from '../data/airports.js';
-export { RIVALS, rivalById, RIVAL_TYPES, ALLIANCES } from '../data/rivals.js';
+export { RIVALS, rivalById, RIVAL_TYPES, ALLIANCES, RIVAL_JVS, RIVAL_TYPE_SHARES } from '../data/rivals.js';
 export { ROLES, ROLE_IDS, SERVICE, SERVICE_IDS, VENTURES, RATINGS, ACTIONS, HR_POLICIES, SUPERVISOR, MANAGER } from '../data/business.js';
 export * from './safety.js';
 export { HISTORY, AIRSPACE, WEATHER } from '../data/history.js';

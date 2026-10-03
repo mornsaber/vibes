@@ -15,6 +15,7 @@
 // (a steady income), and in a crunch you can pre-sell a year of miles for cash.
 
 import { airportByCode } from '../data/airports.js';
+import { RIVAL_JVS } from '../data/rivals.js';
 import { clamp, sum, fail, ok, log, money, newId, rand, yearOf, distanceKm } from './core.js';
 import { rivalDef, rivalAlliance } from './market.js';
 import { treatyFor } from './regulation.js';
@@ -48,6 +49,39 @@ export function jvFor(state, a, b) {
   if (!ra || !rb || ra === rb) return null;
   return state.jvs.find((jv) => jv.status === 'active' && sameRegions(jv, ra, rb) && distanceKm(a, b) >= JV_MIN_DISTANCE) ?? null;
 }
+// Rival joint ventures in force this year (at least two members still flying).
+const JV_MEMBERS = new Set(RIVAL_JVS.flatMap((j) => j.members));
+const jvCache = new WeakMap(); // derived per week, never saved
+export function rivalJVs(state) {
+  const c = jvCache.get(state);
+  if (c && c.week === state.week) return c.list;
+  const year = yearOf(state.week);
+  const list = RIVAL_JVS.filter((j) => year >= j.year && j.members.filter((id) => state.rivals[id]?.status === 'active').length >= 2);
+  jvCache.set(state, { week: state.week, list });
+  return list;
+}
+// The rival JV a rival belongs to on a pair, if any.
+export function rivalJvOn(state, a, b, rivalId) {
+  if (!JV_MEMBERS.has(rivalId)) return null;
+  const ra = regionOf(a);
+  const rb = regionOf(b);
+  if (!ra || !rb || ra === rb || distanceKm(a, b) < JV_MIN_DISTANCE) return null;
+  return rivalJVs(state).find((j) => j.members.includes(rivalId) && sameRegions(j, ra, rb)) ?? null;
+}
+// Could any joint venture (ours or a rival one) apply on this pair at all?
+export function jvPossible(state, a, b) {
+  const ra = regionOf(a);
+  const rb = regionOf(b);
+  if (!ra || !rb || ra === rb) return false;
+  if (!state.jvs?.some((j) => j.status === 'active') && !rivalJVs(state).length) return false;
+  return distanceKm(a, b) >= JV_MIN_DISTANCE;
+}
+
+// Combined effect on a rival's appeal: our JV partner stops competing; rivals in their own JV coordinate.
+export function jvRivalMult(state, a, b, rivalId) {
+  return jvRivalFactor(state, a, b, rivalId) * (rivalJvOn(state, a, b, rivalId) ? JV_BOOST : 1);
+}
+
 // Demand multiplier on our routes (joint sales and connecting schedules).
 export const jvBoost = (state, a, b) => (jvFor(state, a, b) ? JV_BOOST : 1);
 // How much of a rival's appeal remains on a pair (a JV partner coordinates instead of competing).
@@ -98,6 +132,8 @@ export function jvTerms(state, partnerId) {
     const treaty = treatyFor(state, airportByCode[state.hubs[0].code].country, airportByCode[r.hubs[0]].country);
     if (treaty.kind !== 'open' && treaty.kind !== 'single') reasons.push('Regulators require open skies between the home countries');
     if (state.jvs?.some((jv) => jv.status !== 'ended' && sameRegions(jv, home, theirs))) reasons.push('You already have a joint venture in this market');
+    const rival = rivalJVs(state).find((j) => j.members.includes(partnerId) && sameRegions(j, home, theirs));
+    if (rival) reasons.push(`Already in the ${rival.name} joint venture`);
   }
   if (state.reputation < 55) reasons.push('Reputation 55+ required');
   const stats = theirs && theirs !== home ? marketStats(state, regions) : { ask: 0, revenue: 0, freq: 0 };

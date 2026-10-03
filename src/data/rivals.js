@@ -152,3 +152,27 @@ export const ALLIANCES = {
   oneworld: { minRep: 72, minFleet: 40, fee: 25e6 },
   SkyTeam: { minRep: 68, minFleet: 35, fee: 20e6 },
 };
+
+// Revenue-sharing joint ventures between rivals (antitrust-immune), by first year.
+// Members coordinate on long-haul routes between the two regions.
+export const RIVAL_JVS = [
+  { name: 'Northwest–KLM', members: ['KL', 'DL'], regions: ['NA', 'EU'], year: 1993 },
+  { name: 'Air France–KLM–Delta', members: ['DL', 'AF', 'KL', 'VS'], regions: ['NA', 'EU'], year: 2009 },
+  { name: 'Atlantic++ (United–Lufthansa–Air Canada)', members: ['UA', 'LH', 'AC', 'LX', 'OS'], regions: ['NA', 'EU'], year: 2009 },
+  { name: 'Atlantic JV (American–BA–Iberia)', members: ['AA', 'BA', 'IB', 'AY', 'EI'], regions: ['NA', 'EU'], year: 2010 },
+  { name: 'American–JAL', members: ['AA', 'JL'], regions: ['NA', 'AS'], year: 2011 },
+  { name: 'United–ANA', members: ['UA', 'NH'], regions: ['NA', 'AS'], year: 2011 },
+  { name: 'Delta–Korean Air', members: ['DL', 'KE'], regions: ['NA', 'AS'], year: 2018 },
+  { name: 'United–Air New Zealand', members: ['UA', 'NZ'], regions: ['NA', 'OC'], year: 2018 },
+  { name: 'Qantas–American', members: ['QF', 'AA'], regions: ['NA', 'OC'], year: 2022 },
+  { name: 'Qantas–Emirates', members: ['QF', 'EK'], regions: ['OC', 'ME'], year: 2013 },
+];
+
+// Share of each rival's fleet made up of a type, for type groundings (approximate, around 2019).
+export const RIVAL_TYPE_SHARES = {
+  b38m: { WN: 0.05, AA: 0.03, UA: 0.02, AS: 0.02, AC: 0.06, WS: 0.07, AM: 0.1, FR: 0.04, TK: 0.06, PC: 0.05, CA: 0.04, MU: 0.04, CZ: 0.05, LO: 0.05, SV: 0.05, GA: 0.01, VJ: 0.02, NZ: 0, ET: 0.04, KQ: 0, AI: 0, '6E': 0, FZ: 0.4 },
+  b3xm: { UA: 0.01, AS: 0.02, FR: 0.01 },
+  b788: { UA: 0.03, AA: 0.03, BA: 0.03, NH: 0.08, JL: 0.08, QF: 0.04, ET: 0.05, LA: 0.03 },
+  b789: { UA: 0.03, AA: 0.03, BA: 0.03, NH: 0.05, VS: 0.2, QF: 0.04, EY: 0.15, KL: 0.05, AF: 0.03 },
+  a388: { EK: 0.4, SQ: 0.1, QF: 0.08, BA: 0.04, LH: 0.04, QR: 0.04, KE: 0.06, NH: 0.01 },
+};

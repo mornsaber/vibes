@@ -216,12 +216,14 @@ export function setupScenario(state, id) {
     }
   }
   // Schedule: biggest aircraft first, each onto the route where it earns most
-  // (sized to demand). Aircraft with nowhere sensible to go start idle.
+  // (sized to demand), falling back to the least-bad route.
   const bySize = [...state.fleet].sort((a, b) => seatCount(b.config) - seatCount(a.config));
   for (const ac of bySize) {
     const options = routesForAircraft(state, ac, { includeNew: false, limit: 20 });
-    // Profitable routes first; an unserved route beats leaving the aircraft idle.
-    for (const pick of [...options.filter((x) => x.profit > 0), ...options.filter((x) => x.profit <= 0 && !x.served)]) {
+    // Profitable routes first; then unserved ones; then whatever covers the most
+    // of its costs (an inherited aircraft is paid for whether it flies or not).
+    const rest = options.filter((x) => x.profit <= 0 && x.served).sort((x, y) => y.profit + (y.costs?.ownership ?? 0) - (x.profit + (x.costs?.ownership ?? 0)));
+    for (const pick of [...options.filter((x) => x.profit > 0), ...options.filter((x) => x.profit <= 0 && !x.served), ...rest]) {
       const r = state.routes.find((x) => x.id === pick.routeId);
       if (autoAssign(state, ac, r, Math.min(maxFrequency(state, ac, r), Math.max(pick.freq, 3))).ok) break;
     }

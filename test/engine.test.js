@@ -654,6 +654,7 @@ test('connection banks beat a small rolling hub when spokes fly daily', () => {
   assert.ok(banked > rolling, `${banked} vs ${rolling}`);
   assert.ok(thin < banked, 'too many banks for the frequency');
   const s = setup();
+  G.setAutopilot(s, { fleet: false });
   for (const to of ['SEA', 'LAX', 'ORD', 'BZN', 'SLC']) G.openRoute(s, 'DEN', to);
   for (const r of s.routes) G.setFrequency(s, quickLease(s, 'a320n').id, r.id, 14);
   assert.equal(G.suggestedBanks(s, 'DEN'), 2);
@@ -1417,7 +1418,7 @@ function jvSetup() {
   manual(s);
   for (const to of ['CDG', 'FRA', 'MAD']) G.openRoute(s, 'JFK', to);
   for (const r of s.routes) G.setFrequency(s, quickLease(s, 'b789').id, r.id, 7, { autoSlots: true });
-  const partner = G.activeRivals(s).find((r) => r.hubs[0] === 'CDG').id;
+  const partner = G.activeRivals(s).find((r) => r.hubs[0] === 'LIS').id;
   s.partners.codeshares.push(partner);
   s.reputation = 70;
   run(s, 2);
@@ -1633,4 +1634,102 @@ test('version 7 saves migrate to version 8 and keep existing low-cost brands on 
   assert.equal(m.scope.lccSeparate, true, 'grandfathered');
   run(m, 2);
   assert.equal(m.status, 'playing');
+});
+
+// ---------------------------------------------------------------------------
+// Balance sheet, rival joint ventures and groundings, autopilot, goals.
+
+test('the balance sheet carries the loyalty liability and pre-sold miles count as debt', () => {
+  const s = setup();
+  s.loyalty = { members: 400e3, miles: 2e9, bank: null, presold: 0 };
+  const b = G.balanceSheet(s);
+  const miles = b.liabilities.find(([k]) => /Miles owed/.test(k))[1];
+  assert.equal(miles, G.loyaltyLiability(s));
+  assert.ok(Math.abs(b.equity - (b.totalAssets - b.totalLiabilities)) < 1);
+  assert.equal(G.bookEquity(s), b.equity);
+  const debt = G.creditMetrics(s).debt;
+  assert.ok(G.signBankDeal(s).ok);
+  assert.ok(G.presellMiles(s, 52).ok);
+  assert.ok(G.presoldMiles(s) > 0);
+  assert.ok(G.creditMetrics(s).debt > debt, 'pre-sold miles are debt');
+});
+
+test('rivals form their own joint ventures and block yours with a member', () => {
+  const s = setup({ hub: 'JFK' });
+  const jvs = G.rivalJVs(s).map((j) => j.name);
+  assert.ok(jvs.some((n) => /Delta/.test(n)));
+  assert.ok(G.rivalJvOn(s, 'JFK', 'CDG', 'DL'), 'Delta coordinates with Air France across the Atlantic');
+  assert.equal(G.rivalJvOn(s, 'JFK', 'LAX', 'DL'), null, 'domestic routes are outside it');
+  s.partners.codeshares.push('AF');
+  assert.match(G.jvTerms(s, 'AF').reasons.join(), /Air France–KLM–Delta/);
+  const old = setup({ hub: 'JFK', startYear: 1990 });
+  assert.equal(G.rivalJVs(old).length, 0, 'none before 1993');
+});
+
+test('a grounding also takes capacity away from rivals that fly the type', () => {
+  const s = setup();
+  assert.equal(s.rivals.WN.grounded, undefined);
+  G.groundTypes(s, ['b38m'], 10, 'Test grounding');
+  assert.ok(s.rivals.WN.grounded < 1 && s.rivals.WN.grounded > 0.9);
+  const e = G.rivalsOn(s, 'DEN', 'LAS', G.rivalsContext(s, { memo: false })).find((r) => r.id === 'WN');
+  if (e) assert.ok(e.cap < s.rivals.WN.capIdx);
+  run(s, 11);
+  assert.equal(s.rivals.WN.grounded, undefined, 'capacity restored');
+});
+
+test('the autopilot sizes new service to demand and trims half-empty routes', () => {
+  const s = setup();
+  G.setAutopilot(s, { fleet: true, network: false });
+  const { route } = G.openRoute(s, 'DEN', 'BZN');
+  const ac = quickLease(s, 'a320n');
+  run(s, 1);
+  const f = G.entryFreq(ac, route.id);
+  assert.ok(f >= 1 && f < 14, `small market gets ${f}/wk, not a blanket 14`);
+  // A route stuck below 55% at floor fares gets trimmed.
+  const big = G.openRoute(s, 'DEN', 'SEA').route;
+  const ac2 = quickLease(s, 'a320n');
+  const max = G.maxFrequency(s, ac2, big);
+  assert.ok(G.setFrequency(s, ac2.id, big.id, max).ok);
+  big.hist = [0, 1, 2, 3].map((i) => ({ week: s.week - i, lf: 0.4 }));
+  big.last = { ...(big.last ?? {}), seatTotal: 1000, lf: 0.4 };
+  for (const c of G.CLASSES) big.fares[c] = Math.round(G.fareNow(s, big.distance, c) * 0.8);
+  const cut = G.autoTrim(s);
+  assert.ok(cut.some((x) => x.route === 'DEN–SEA'));
+  assert.ok(G.routeFreq(s, big) < max);
+});
+
+test('the autopilot can open a route for an idle aircraft', () => {
+  const s = setup();
+  G.setAutopilot(s, { fleet: true, network: true });
+  s.cash = 3e8;
+  const routes = s.routes.length;
+  const ac = quickLease(s, 'a320n');
+  run(s, 2);
+  assert.ok(s.routes.length > routes, 'a new route was opened');
+  assert.ok(ac.schedule.length > 0);
+  assert.equal(s.autopilot.lastOpened != null, true);
+});
+
+test('records, goals and the home leaderboard', () => {
+  const s = setup();
+  const { route } = G.openRoute(s, 'DEN', 'LAX');
+  G.assignAircraft(s, quickLease(s, 'a320n').id, route.id);
+  run(s, 3);
+  assert.ok(s.records.pax.value > 0 && s.records.fleet.value === 1);
+  const goals = G.nextGoals(s, 3);
+  assert.equal(goals.length, 3);
+  assert.ok(goals.every((g) => g.progress >= 0 && g.progress < 1));
+  const board = G.leaderboard(s);
+  assert.ok(board.some((r) => r.you));
+  assert.ok(board.every((r, i) => i === 0 || board[i - 1].pax >= r.pax));
+  G.rankTick(s);
+  assert.ok(s.rank.rank >= 1 && s.rank.of === board.length);
+});
+
+test('thinly covered markets get local competition, well covered ones do not', () => {
+  const s = setup({ hub: 'GRU' });
+  const ctx = G.rivalsContext(s, { memo: false });
+  assert.ok(G.localCompetition(s, 'GRU', 'SCL', 'Y', ctx) > 1);
+  const us = setup();
+  assert.equal(G.localCompetition(us, 'ORD', 'DEN', 'Y', G.rivalsContext(us, { memo: false })), 0);
 });

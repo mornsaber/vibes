@@ -1,7 +1,7 @@
 // History: market share against home-market rivals, annual reports and the
 // milestone timeline.
 
-import { G, esc, money, pct, int, num, kpi, panel, table, tabs, signed, liverySvg } from '../util.js';
+import { G, esc, money, pct, int, num, kpi, panel, table, tabs, signed, liverySvg, pill } from '../util.js';
 
 const PALETTE = ['#f5a524', '#e5484d', '#30a46c', '#8e4ec6', '#12a594', '#e93d82', '#a18072'];
 
@@ -9,7 +9,7 @@ export function render(c) {
   const tab = c.params[0] ?? 'share';
   const body = { share, reports, timeline }[tab] ?? share;
   return `<div class="page-head"><h1>History</h1><span class="muted">Founded ${G.dateLabel(c.state.startWeek)} · ${int((G.elapsed(c.state) / 52) * 10) / 10} years · score ${int(c.state.scenario?.score || G.freeScore(c.state))}</span></div>
-  ${tabs('history', [['share', 'Market share'], ['reports', 'Annual reports'], ['timeline', 'Milestones']], tab)}
+  ${tabs('history', [['share', 'Market share'], ['reports', 'Annual reports'], ['timeline', 'Trophies & records']], tab)}
   ${body(c)}`;
 }
 
@@ -90,7 +90,30 @@ function timeline(c) {
     ...(s.milestones ?? []),
     ...s.incidents.filter((i) => i.severity === 'hull loss').map((i) => ({ week: i.week, label: `Accident: ${i.reg} — ${i.text}`, tone: 'bad' })),
   ].sort((a, b) => a.week - b.week);
-  return panel('Timeline', `<ol class="timeline">${items.map((m) => `<li class="${m.tone ?? 'good'}"><span class="when">${G.dateLabel(m.week)}</span><span>${esc(m.label)}</span></li>`).join('')}</ol>`);
+  const got = new Map((s.milestones ?? []).map((m) => [m.id, m]));
+  const trophies = G.MILESTONES.filter((m) => m.tone !== 'bad');
+  const rec = s.records ?? {};
+  const board = G.leaderboard(s);
+  return `<div class="grid cols-2">
+    ${panel(`Trophy cabinet — ${trophies.filter((m) => got.has(m.id)).length} of ${trophies.length}`, `<div class="trophies">${trophies.map((m) => {
+      const have = got.get(m.id);
+      const p = !have && m.progress ? Math.min(0.999, Math.max(0, m.progress(s))) : null;
+      return `<div class="trophy ${have ? 'won' : ''}" title="${have ? `Won ${G.dateLabel(have.week)}` : 'Not yet'}"><span class="cup">${have ? '🏆' : '🔒'}</span><span>${esc(m.label)}${have ? `<small class="muted block">${G.dateLabel(have.week)}</small>` : p != null ? `<small class="muted block">${Math.round(p * 100)}% there</small>` : ''}</span></div>`;
+    }).join('')}</div>`)}
+    <div class="stack">
+      ${panel('Personal records', table(Object.entries(G.RECORDS).filter(([k]) => rec[k]), [
+        { h: 'Record', v: ([, r]) => esc(r.label) },
+        { h: 'Best', cls: 'num', v: ([k, r]) => r.fmt(rec[k].value) },
+        { h: 'Set', v: ([k]) => G.dateLabel(rec[k].week) },
+      ], { empty: 'Fly a few weeks to set some records.' }))}
+      ${panel('Home leaderboard (passengers / week)', table(board.slice(0, 10), [
+        { h: '#', cls: 'num', v: (r) => r.rank },
+        { h: 'Airline', v: (r) => (r.you ? `<b>${esc(r.name)}</b> ${pill('You', 'good')}` : `<a href="#competitors/${r.id}">${esc(r.name)}</a>`) },
+        { h: 'Passengers', cls: 'num', v: (r) => int(r.pax) },
+      ]) + (board.find((r) => r.you).rank > 10 ? `<p class="muted small">You are #${board.find((r) => r.you).rank}.</p>` : ''))}
+    </div>
+  </div>
+  ${panel('Timeline', `<ol class="timeline">${items.map((m) => `<li class="${m.tone ?? 'good'}"><span class="when">${G.dateLabel(m.week)}</span><span>${esc(m.label)}</span></li>`).join('')}</ol>`)}`;
 }
 
 export const actions = {

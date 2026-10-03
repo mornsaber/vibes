@@ -376,6 +376,28 @@ export const cargoCapacity = (ac) => {
   return type.cargoT * 1000 * (isFreighter(type) ? 1 : 0.6) + (ac.config.C || 0) * 1000;
 };
 
+// Planned capacity of every route at once, cached per schedule version and season
+// (derived, never saved). Used by the estimators, which ask about many routes.
+const capCache = new WeakMap();
+export function plannedCapacity(state, route) {
+  const season = seasonOf(state.week);
+  const version = scheduleVersion(state);
+  let c = capCache.get(state);
+  if (!c || c.version !== version || c.season !== season || c.fleet !== state.fleet.length) {
+    const map = new Map();
+    for (const ac of state.fleet) {
+      for (const s of activeSchedule(state, ac, season)) {
+        let cap = map.get(s.routeId);
+        if (!cap) map.set(s.routeId, (cap = { F: 0, J: 0, W: 0, Y: 0, C: 0 }));
+        for (const k of CLASSES) cap[k] += s.freq * (ac.config[k] || 0);
+        cap.C += s.freq * cargoCapacity(ac);
+      }
+    }
+    capCache.set(state, (c = { version, season, fleet: state.fleet.length, map }));
+  }
+  return c.map.get(route.id) ?? { F: 0, J: 0, W: 0, Y: 0, C: 0 };
+}
+
 export function routeCapacity(state, route, { operating = false, season = seasonOf(state.week) } = {}) {
   const cap = { F: 0, J: 0, W: 0, Y: 0, C: 0 };
   for (const ac of state.fleet) {

@@ -1,7 +1,7 @@
 // Market model: origin–destination demand, class mix, reference fares,
 // seasonality, cargo demand, traffic rights, and where rival airlines fly.
 
-import { jvRivalFactor } from './commercial.js';
+import { jvRivalMult, jvPossible } from './commercial.js';
 import { airportByCode, SINGLE_MARKETS } from '../data/airports.js';
 import { classFareMultiplier } from '../data/aircraft.js';
 import { RIVALS, RIVAL_TYPES, rivalById } from '../data/rivals.js';
@@ -244,7 +244,7 @@ export function rivalsContext(state, { memo = true } = {}) {
   let stamp = '';
   for (const id in state.rivals) {
     const r = state.rivals[id];
-    stamp += `${id}:${r.status}:${r.fareIdx}:${r.capIdx}:${r.mergedInto ?? ''}:${r.fleet};`;
+    stamp += `${id}:${r.status}:${r.fareIdx}:${r.capIdx}:${r.grounded ?? 1}:${r.mergedInto ?? ''}:${r.fleet};`;
   }
   for (const r of state.newRivals ?? []) stamp += `${r.id}@${r.hubs.join(',')};`;
   let cached = rivalsMemo.get(state);
@@ -279,7 +279,7 @@ function rivalsOnUncached(state, a, b, k, adj, ctx) {
     const m = adj?.[id];
     if (!rs || rs.status !== 'active' || m?.exited || seen.has(id)) continue;
     seen.add(id);
-    out.push({ id, nonstop: s.nonstop, via: s.via, fare: rs.fareIdx * (m?.fare ?? 1), cap: rs.capIdx * (m?.cap ?? 1) });
+    out.push({ id, nonstop: s.nonstop, via: s.via, fare: rs.fareIdx * (m?.fare ?? 1), cap: rs.capIdx * (rs.grounded ?? 1) * (m?.cap ?? 1) });
   }
   // Startups only fly nonstop from their bases.
   for (const r of [...(ctx.byAirport.get(a) ?? []), ...(ctx.byAirport.get(b) ?? [])]) {
@@ -287,22 +287,49 @@ function rivalsOnUncached(state, a, b, k, adj, ctx) {
     if (seen.has(r.id) || m?.exited || !rivalFliesNonstop(r, a, b)) continue;
     const rs = state.rivals[r.id];
     seen.add(r.id);
-    out.push({ id: r.id, nonstop: true, fare: rs.fareIdx * (m?.fare ?? 1), cap: rs.capIdx * (m?.cap ?? 1) * Math.min(1, rs.fleet / 40 + 0.3) });
+    out.push({ id: r.id, nonstop: true, fare: rs.fareIdx * (m?.fare ?? 1), cap: rs.capIdx * (rs.grounded ?? 1) * (m?.cap ?? 1) * Math.min(1, rs.fleet / 40 + 0.3) });
   }
   if (adj) {
     for (const id in adj) {
       const m = adj[id];
       if (!m.entered || seen.has(id) || state.rivals[id]?.status !== 'active') continue;
-      out.push({ id, nonstop: true, fare: state.rivals[id].fareIdx * (m.fare ?? 1), cap: state.rivals[id].capIdx * (m.cap ?? 1), entered: true });
+      out.push({ id, nonstop: true, fare: state.rivals[id].fareIdx * (m.fare ?? 1), cap: state.rivals[id].capIdx * (state.rivals[id].grounded ?? 1) * (m.cap ?? 1), entered: true });
     }
   }
   // One-stop itineraries compete with each other for the same few travellers:
   // a crowd of them on a big long-haul market must not outweigh the nonstops.
   const conn = connectingWeight(out.filter((e) => !e.nonstop).length);
   for (const e of out) if (!e.nonstop) e.w = conn;
-  // A joint-venture partner coordinates with us instead of competing.
-  if (state.jvs?.length) for (const e of out) e.jv = jvRivalFactor(state, a, b, e.id);
+  // Our joint-venture partner coordinates with us; rivals in their own JVs coordinate with each other.
+  if (jvPossible(state, a, b)) {
+    for (const e of out) {
+      const m = jvRivalMult(state, a, b, e.id);
+      if (m !== 1) e.jv = m;
+    }
+  }
   return out;
+}
+
+// Airlines the rival list doesn't cover. Busy markets attract competitors; where
+// the listed rivals add up to less than a market of this size would have, the
+// gap is filled by "other local airlines". Appeal units in economy; premium
+// cabins see less of it (local carriers are mostly no-frills).
+export const FILL_CLASS = { F: 0.2, J: 0.4, W: 0.5, Y: 1, C: 0.3 };
+export function localCompetition(state, a, b, cls, ctx) {
+  const key = `fill|${pairKey(a, b)}`;
+  let fill = ctx?.memo?.get(key);
+  if (fill === undefined) {
+    const A = airportByCode[a];
+    const B = airportByCode[b];
+    const biz = (A.biz + B.biz) / 2;
+    const list = rivalsOn(state, a, b, ctx);
+    let listed = 0;
+    for (const r of list) listed += ctx?.views ? rivalAppealFast(state, ctx, r, 'Y', biz) : rivalAppeal(state, r, 'Y', biz);
+    const expected = clamp(marketNow(state, a, b) / 1800, 0.5, 9);
+    fill = Math.max(0, expected - listed) * 0.8;
+    ctx?.memo?.set(key, fill);
+  }
+  return fill * FILL_CLASS[cls];
 }
 
 // Weight of each connecting option when n are on offer (diminishing returns).
@@ -360,10 +387,10 @@ export function rivalAppeal(state, entry, cls, biz) {
   const rep = 0.5 + (state.rivals[rival.id].rep ?? 60) / 100;
   return (
     partner *
-    (entry.jv ?? 1) *
     rep *
     type.quality *
     rival.quality *
+    (entry.jv ?? 1) *
     Math.min(1.6, entry.cap) *
     priceEffect(type.fare * entry.fare, 1, cls, biz) *
     // Incumbents run many daily frequencies; network carriers dominate their hubs.

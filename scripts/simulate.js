@@ -5,6 +5,7 @@
 //   ONLY=regex   only strategies whose label matches
 //   VERBOSE=1    per-route and cost breakdown
 //   NO_COMMONALITY=1  switch off mixed-fleet penalties (for comparison)
+//   AUTOPILOT=1  let the fleet autopilot schedule the aircraft instead of the script
 import * as G from '../src/engine/index.js';
 
 const years = Number(process.argv[2]) || 2;
@@ -15,7 +16,8 @@ function play(label, { hub, routes, types, seed = Number(process.env.SEED) || 11
   const s = G.newGame({ name: 'Sim Air', code: 'SM', hub, seed });
   if (process.env.NO_COMMONALITY) s.settings.commonality = false;
   // Pricing is left to the autopilot (on by default); fleet assignment is scripted below.
-  G.setAutopilot(s, { pricing, fleet: false });
+  const auto = !!process.env.AUTOPILOT;
+  G.setAutopilot(s, { pricing, fleet: auto });
   for (const to of routes) {
     const r = G.openRoute(s, hub, to);
     if (!r.ok) console.log('  open failed', to, r.error);
@@ -30,6 +32,7 @@ function play(label, { hub, routes, types, seed = Number(process.env.SEED) || 11
     }
   }
   const schedule = () => {
+    if (auto) return;
     for (const ac of s.fleet) {
       if (ac.schedule.length || G.typeOf(ac).cat === 'freighter') continue;
       const opts = s.routes

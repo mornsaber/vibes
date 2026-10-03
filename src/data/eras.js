@@ -11,6 +11,16 @@ const interp = (points, year) => {
   return points[points.length - 1][1];
 };
 
+// A curve with its interpolations remembered by year (they are asked for constantly).
+const curve = (points) => {
+  const memo = new Map();
+  return (year) => {
+    let v = memo.get(year);
+    if (v === undefined) memo.set(year, (v = interp(points, year)));
+    return v;
+  };
+};
+
 const DECADES = [1960, 1970, 1980, 1990, 2000, 2010, 2020, 2030];
 // Air travel demand by region relative to 2027 — growth shifts east over time.
 const REGION_DEMAND = {
@@ -22,20 +32,27 @@ const REGION_DEMAND = {
   AF: [0.06, 0.1, 0.18, 0.25, 0.35, 0.55, 0.95, 1.08],
   OC: [0.15, 0.28, 0.42, 0.55, 0.7, 0.85, 0.97, 1.04],
 };
-export const regionDemand = (region, year) => interp(DECADES.map((d, i) => [d, REGION_DEMAND[region][i]]), year);
+const REGION_POINTS = Object.fromEntries(Object.entries(REGION_DEMAND).map(([r, v]) => [r, DECADES.map((d, i) => [d, v[i]])]));
+const demandMemo = new Map();
+export const regionDemand = (region, year) => {
+  const k = `${region}${year}`;
+  let v = demandMemo.get(k);
+  if (v === undefined) demandMemo.set(k, (v = interp(REGION_POINTS[region], year)));
+  return v;
+};
 
 // Jet fuel, USD per kg.
-export const eraFuel = (year) => interp([[1960, 0.32], [1970, 0.3], [1975, 0.55], [1980, 0.85], [1986, 0.5], [1990, 0.5], [1999, 0.38], [2005, 0.65], [2010, 0.9], [2014, 0.95], [2016, 0.55], [2020, 0.5], [2023, 0.9], [2030, 0.85]], year);
+export const eraFuel = curve([[1960, 0.32], [1970, 0.3], [1975, 0.55], [1980, 0.85], [1986, 0.5], [1990, 0.5], [1999, 0.38], [2005, 0.65], [2010, 0.9], [2014, 0.95], [2016, 0.55], [2020, 0.5], [2023, 0.9], [2030, 0.85]]);
 // Real fares were far higher before deregulation and low-cost carriers.
-export const eraFare = (year) => interp([[1960, 1.9], [1970, 1.7], [1978, 1.5], [1985, 1.25], [1995, 1.12], [2005, 1.03], [2015, 1.0]], year);
+export const eraFare = curve([[1960, 1.9], [1970, 1.7], [1978, 1.5], [1985, 1.25], [1995, 1.12], [2005, 1.03], [2015, 1.0]]);
 // Travel-agent commissions before online booking.
-export const eraDistribution = (year) => interp([[1960, 0.14], [1995, 0.13], [2005, 0.1], [2012, 0.08]], year);
+export const eraDistribution = curve([[1960, 0.14], [1995, 0.13], [2005, 0.1], [2012, 0.08]]);
 // Central bank policy rate.
-export const eraRate = (year) => interp([[1960, 0.04], [1975, 0.07], [1981, 0.14], [1990, 0.08], [2000, 0.06], [2009, 0.01], [2016, 0.01], [2023, 0.05], [2030, 0.04]], year);
+export const eraRate = curve([[1960, 0.04], [1975, 0.07], [1981, 0.14], [1990, 0.08], [2000, 0.06], [2009, 0.01], [2016, 0.01], [2023, 0.05], [2030, 0.04]]);
 // Base accident rate multiplier (aviation got dramatically safer).
-export const eraSafety = (year) => interp([[1960, 25], [1970, 15], [1980, 8], [1990, 5], [2000, 3], [2010, 1.5], [2020, 1]], year);
+export const eraSafety = curve([[1960, 25], [1970, 15], [1980, 8], [1990, 5], [2000, 3], [2010, 1.5], [2020, 1]]);
 // Unions were strongest in the post-war decades.
-export const eraUnion = (year) => interp([[1960, 0.85], [1980, 0.7], [2000, 0.55], [2020, 0.5]], year);
+export const eraUnion = curve([[1960, 0.85], [1980, 0.7], [2000, 0.55], [2020, 0.5]]);
 
 export const ERAS = [
   { from: 1945, name: 'Propeller age', blurb: 'Piston airliners, regulated fares, flag carriers everywhere.' },

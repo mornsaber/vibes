@@ -50,7 +50,8 @@ function autopilot(c) {
     ${panel('Autopilot', `<div class="stack">
       ${toggle('pricing', 'Auto-pricing', 'Each week, nudge fares on every route toward the target load factor (within 80–160% of the brand’s normal level).')}
       ${toggle('rm', 'Revenue management', 'Open the advance-purchase bucket when planes run empty; close it to protect seats for flexible buyers when they fill.')}
-      ${toggle('fleet', 'Fleet assignment', 'Put idle aircraft on the routes turning away the most passengers, and top up full routes with spare hours.')}
+      ${toggle('fleet', 'Fleet assignment', 'Put idle aircraft on the routes with the best estimated results, sized to demand; use spare hours for a second route; trim routes that stay half-empty at floor fares.')}
+      ${toggle('network', 'Open new routes for idle aircraft', 'When an aircraft has nowhere worth flying, open the most promising new route for it (at most one a month, only with over $25M in cash).')}
       <div class="field"><label>Target load factor: <b>${pct(ap.targetLF)}</b></label><input type="range" min="0.65" max="0.95" step="0.01" value="${ap.targetLF}" data-change="autopilot-lf"><small class="muted">Higher fills more seats at lower fares; lower holds yield but spills more passengers.</small></div>
     </div>`)}
     ${panel('Routes priced by hand', `${table(manual, [

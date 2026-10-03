@@ -8,6 +8,8 @@ import { aircraftById, engineOf } from '../data/aircraft.js';
 import { clamp, sum, log, money, rand, randInt, yearOf, weekOfYearStart } from './core.js';
 import { typeOf, isDelivered, inDowntime, addWork, monthlyLeaseRate, weeklyFromMonthly } from './fleet.js';
 import { inProduction } from '../data/aircraft.js';
+import { RIVAL_TYPE_SHARES } from '../data/rivals.js';
+import { rivalDef } from './market.js';
 
 export const LAUNCH_DISCOUNT = 0.15;
 export const LAUNCH_DEPOSIT = 0.1;
@@ -61,6 +63,22 @@ export function groundTypes(state, types, weeks, reason) {
       o.deliveryWeek = until + held++ * 2;
     }
   }
+  // Rivals flying the type lose that share of their capacity.
+  const hit = [];
+  const rivals = {};
+  for (const t of types) {
+    for (const [id, share] of Object.entries(RIVAL_TYPE_SHARES[t] ?? {})) {
+      const rs = state.rivals[id];
+      if (!share || rs?.status !== 'active') continue;
+      rivals[id] = (rivals[id] ?? 1) * (1 - share);
+    }
+  }
+  for (const [id, f] of Object.entries(rivals)) {
+    state.rivals[id].grounded = (state.rivals[id].grounded ?? 1) * f;
+    if (1 - f >= 0.03) hit.push(`${rivalDef(state, id)?.name} (${Math.round((1 - f) * 100)}%)`);
+  }
+  state.groundings.at(-1).rivals = rivals;
+  if (hit.length) log(state, `Rivals cancel flights: ${hit.slice(0, 5).join(', ')}${hit.length > 5 ? ` and ${hit.length - 5} more` : ''} of their fleets are grounded too.`, 'info', 'rivals');
   const ours = state.fleet.filter((a) => types.includes(a.type)).length;
   log(state, `${reason}: every ${types.map((t) => aircraftById[t].name).join(' / ')} is grounded for about ${weeks} weeks${ours ? ` — ${ours} of yours` : ''}. Deliveries are frozen; the manufacturer will pay partial compensation.`, 'bad', 'fleet');
   return until;
@@ -103,6 +121,12 @@ export function oemTick(state, monthly) {
     if (g.done) continue;
     if (state.week >= g.until) {
       g.done = true;
+      for (const [id, f] of Object.entries(g.rivals ?? {})) {
+        const rs = state.rivals[id];
+        if (!rs?.grounded) continue;
+        rs.grounded /= f;
+        if (rs.grounded > 0.999) delete rs.grounded;
+      }
       if (state.fleet.some((a) => g.types.includes(a.type))) log(state, `Regulators clear the ${g.types.map((t) => aircraftById[t].name).join(' / ')} to fly again.`, 'good', 'fleet');
       continue;
     }

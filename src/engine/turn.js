@@ -13,13 +13,13 @@ import { PRESETS, makeSettings } from '../data/difficulty.js';
 import { clamp, sum, fail, ok, rand, randNormal, log, money, monthKey, quarterKey, yearOf, weeksInUnit, weekOfYearStart, elapsed, setPriceLevel, dayOfYear } from './core.js';
 import { typeOf, isDelivered, makeAircraft, refreshMarkets, removeAircraft, weeklyFromMonthly, aircraftValue, commonality } from './fleet.js';
 import { replenishSlots, stations, scheduleChanged, newHub, hubWeeklyCost, autoBankTick, terminalTick } from './network.js';
-import { autoPricing, autoFleet, defaultAutopilot } from './advisor.js';
+import { autoPricing, autoFleet, autoTrim, defaultAutopilot } from './advisor.js';
 import { brandTick, campaignTick, defaultLivery, BRAND_WEEKLY } from './brands.js';
 import { regulationYearly } from './regulation.js';
 import { rivalReactTick } from './rivalai.js';
 import { inChapter11, restructuringTerms, restructuringTick } from './restructuring.js';
 import { newTutorial } from './tutorial.js';
-import { milestoneTick, shareTick, annualReport } from './chronicle.js';
+import { milestoneTick, shareTick, annualReport, recordsTick, rankTick } from './chronicle.js';
 import { setupScenario, scenarioTick, finalizeScenario, SCENARIOS } from './scenarios.js';
 import { maintenanceTick, facilityUpkeep } from './maintenance.js';
 import { staffTick, strikeTick, payroll, headcount, newWorkforce } from './staff.js';
@@ -80,7 +80,7 @@ function createGame({ name = 'Skyward Air', code = 'SK', hub = 'ORD', seed, diff
     incidents: [],
     timeline: [],
     brandShock: null,
-    marketing: 150e3,
+    marketing: 100e3,
     reputation: 50,
     engineering: { auto: { A: true, B: true, C: true, D: true }, provider: (MRO_PROVIDERS.find((m) => m.region === ap.region) ?? MRO_PROVIDERS[0]).id, preferInHouse: true },
     loans: [],
@@ -269,9 +269,13 @@ function boardReview(state) {
   const price = sharePrice(state);
   const change = (price - state.board.lastPrice) / state.board.lastPrice;
   const goodRating = ['AAA', 'AA', 'A', 'BBB', 'BB'].includes(state.finance.rating);
-  let delta = clamp(change * 50, -12, 12) + (qProfit > 0 ? 5 : -5) + (goodRating ? 2 : -3) + (state.reputation > 60 ? 2 : 0);
+  // Boards back a turnaround: a clearly better quarter than the last earns credit.
+  const prevQ = sum(state.history.slice(-26, -13), (h) => h.profit);
+  const improving = state.history.length >= 26 && qProfit - prevQ > Math.max(1e6, Math.abs(prevQ) * 0.15);
+  let delta = clamp(change * 50, -12, 12) + (qProfit > 0 ? 5 : -5) + (goodRating ? 2 : -3) + (state.reputation > 60 ? 2 : 0) + (improving ? 3 : 0);
   if (delta < 0) delta /= state.settings?.board ?? 1;
-  if (state.board.reviews < 4 && delta < 0) delta /= 2;
+  // Startups are expected to lose money at first: the board is patient for six quarters.
+  if (state.board.reviews < 6 && delta < 0) delta /= 2;
   state.board.reviews += 1;
   state.board.confidence = clamp(state.board.confidence + delta, 0, 100);
   state.board.lastPrice = price;
@@ -576,6 +580,7 @@ export function advanceWeek(state) {
   if (monthKey(state.week) !== prevMonth) {
     autoBankTick(state);
     shareTick(state);
+    rankTick(state);
     scenarioTick(state);
     rivalsTick(state);
     refreshMarkets(state);
@@ -583,6 +588,7 @@ export function advanceWeek(state) {
     generateOffers(state);
     rateCredit(state);
     scopeTick(state);
+    autoTrim(state);
     state.macro.baseRate = clamp(state.macro.baseRate + (eraRate(yearOf(state.week)) - state.macro.baseRate) * 0.08 + randNormal(state) * 0.0015, 0.005, 0.18);
   }
   if (quarterKey(state.week) !== prevQuarter) {
@@ -591,6 +597,7 @@ export function advanceWeek(state) {
   }
   if (yearOf(state.week) !== prevYear) yearEnd(state, prevYear);
 
+  recordsTick(state, state.history[state.history.length - 1]);
   milestoneTick(state);
   const price = sharePrice(state);
   state.history[state.history.length - 1].sharePrice = price;

@@ -13,7 +13,7 @@ import { clamp, sum, distanceKm, randNormal, pairKey, yearOf } from './core.js';
 import { eraDistribution } from '../data/eras.js';
 import {
   marketNow, classShares, cargoNow, seasonality, fareNow, refCargoRate,
-  priceEffect, rivalsOn, rivalsContext, rivalAppeal, rivalAppealFast, OUTSIDE_OPTION, sameMarket, rivalDef,
+  priceEffect, rivalsOn, rivalsContext, rivalAppeal, rivalAppealFast, OUTSIDE_OPTION, sameMarket, rivalDef, localCompetition, FILL_CLASS,
   priceSensitiveShare, flexMult, advMult, MARKET_SPREAD, DEFAULT_RM, FLEX_ELASTICITY, ADV_ELASTICITY, seasonalFare,
 } from './market.js';
 import { typeOf, isOperational, isFreighter, fuelFactor, productQuality, ageYears, commonality } from './fleet.js';
@@ -205,6 +205,7 @@ export function simulateOperations(state, { fuelPrice, macro }) {
     const season = rawSeason * macro * tickShockRegions(state, f.a, f.b);
     const shares = classShares(f.a, f.b);
     const rivals = rivalsOn(state, f.a, f.b, rivalCtx);
+    const localY = localCompetition(state, f.a, f.b, 'Y', rivalCtx);
     const lead = f.legs[0];
     const brand = lead.brand;
     const kind = brandKind(brand);
@@ -234,7 +235,7 @@ export function simulateOperations(state, { fuelPrice, macro }) {
       f.dA[c] = 0;
       if (f.legs.some((l) => l.cap[c] <= 0) || freq <= 0) continue;
       const generic = long ? 0.25 : 0.1;
-      let theirs = generic + OUTSIDE_OPTION[c];
+      let theirs = generic + OUTSIDE_OPTION[c] + localY * FILL_CLASS[c];
       for (const r of rivals) theirs += rivalAppealFast(state, rivalCtx, r, c, biz);
       if (c === 'C') {
         const idx = sum(f.legs, (l) => l.route.cargoIdx) / f.legs.length;
@@ -375,8 +376,8 @@ export function simulateOperations(state, { fuelPrice, macro }) {
     const bhAvg = s.flights ? s.hours / s.flights : 0;
     const premiumPax = s.pax.J + s.pax.F;
     const year = yearOf(state.week);
-    s.cost.paxFees = paxTotal * ((9 + (intl ? 12 : 0)) * fee + (year >= 2002 ? 6 : year >= 1990 ? 2 : 0));
-    s.cost.handling = (paxTotal * (hubEnds === 2 ? 3 : hubEnds === 1 ? 6 : 9) + s.cargoKg * 0.12) * (kc.handling ?? 1);
+    s.cost.paxFees = paxTotal * ((6.5 + (intl ? 10 : 0)) * fee + (year >= 2002 ? 5 : year >= 1990 ? 2 : 0));
+    s.cost.handling = (paxTotal * (hubEnds === 2 ? 2.5 : hubEnds === 1 ? 4.5 : 7) + s.cargoKg * 0.12) * (kc.handling ?? 1);
     const perHour = bSvc === state.service ? svcPerHour : sum(SERVICE_IDS.filter((k) => !SERVICE[k].perPax), (k) => SERVICE[k].cost[bSvc[k] - 1]);
     const perPax = bSvc === state.service ? svcPerPax : sum(SERVICE_IDS.filter((k) => SERVICE[k].perPax), (k) => SERVICE[k].cost[bSvc[k] - 1]);
     s.cost.service = (paxTotal * (perHour * bhAvg + perPax + camp.perPax) + premiumPax * perHour * bhAvg * 1.5) * (kc.service ?? 1);

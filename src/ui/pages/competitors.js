@@ -42,8 +42,17 @@ function list(c) {
     { h: 'Margin', cls: 'num', v: (x) => (x.rs.margin != null ? `<span class="${x.rs.margin < 0 ? 'bad' : ''}">${pct(x.rs.margin, 1)}</span>` : '–') },
     { h: 'Overlap', cls: 'num', v: (x) => x.overlap.length },
     { h: 'Hostility', v: (x) => bar((x.rs.hostility ?? 0) * 100, 100, { invert: true }) },
-    { h: 'Relation', v: (x) => (s.partners.codeshares.includes(x.r.id) ? pill('Codeshare', 'good') : s.partners.alliance && x.r.alliance === s.partners.alliance ? pill('Alliance', 'good') : '') },
-  ], { empty: 'No rival flies against you yet.' }))}`;
+    { h: 'Relation', v: (x) => (s.partners.codeshares.includes(x.r.id) ? pill('Codeshare', 'good') : s.partners.alliance && x.r.alliance === s.partners.alliance ? pill('Alliance', 'good') : '') + (x.rs.grounded ? ` ${pill(`${Math.round((1 - x.rs.grounded) * 100)}% grounded`, 'warn')}` : '') },
+  ], { empty: 'No rival flies against you yet.' }))}
+  ${(() => {
+    const jvs = G.rivalJVs(s);
+    return jvs.length ? panel('Rival joint ventures', `${table(jvs, [
+      { h: 'Venture', v: (j) => `<b>${esc(j.name)}</b>` },
+      { h: 'Market', v: (j) => `${esc(G.REGIONS[j.regions[0]].name)} – ${esc(G.REGIONS[j.regions[1]].name)}` },
+      { h: 'Members', v: (j) => j.members.filter((id) => s.rivals[id]?.status === 'active').map((id) => `<a href="#competitors/${id}">${esc(G.rivalDef(s, id)?.code ?? id)}</a>`).join(' · ') },
+      { h: 'Since', v: (j) => j.year },
+    ])}<p class="muted small">Members coordinate schedules and fares on long-haul routes in their market (+12% appeal) and won't sign a rival joint venture with you there.</p>`) : '';
+  })()}`;
 }
 
 function detail(c, r) {
@@ -72,6 +81,8 @@ function detail(c, r) {
       ['Relationship', `${int(rs.relation)}/100`],
       ['Founded', r.founded ?? '—'],
       ['Crew pay offer', rs.payIdx ? `${pct(rs.payIdx)} of market` : '—'],
+      ['Joint ventures', G.rivalJVs(s).filter((j) => j.members.includes(r.id)).map((j) => esc(j.name)).join('<br>') || 'None'],
+      ...(rs.grounded ? [['Grounded fleet', `<span class="warn">${Math.round((1 - rs.grounded) * 100)}% of capacity</span>`]] : []),
       ['Status', rs.status === 'active' ? 'Operating' : rs.status === 'merged' ? `Merged into ${esc(G.rivalDef(s, rs.mergedInto)?.name ?? '')}` : rs.status === 'acquired' ? 'Acquired by you' : 'Ceased operations'],
     ]))}
     ${panel('Partnership', s.partners.codeshares.includes(r.id) ? `<p>${pill('Codeshare partner', 'good')}</p><button class="danger small" data-action="end-codeshare" data-id="${r.id}">End codeshare</button>` : terms.reasons.length ? `<p class="muted">${terms.reasons.map(esc).join('<br>')}</p>` : `<p>They might consider a codeshare (fit score ${num(terms.score, 2)}; 0.6 needed).</p><button class="primary" data-action="propose-codeshare" data-id="${r.id}">Propose codeshare (${money(terms.fee)})</button>`)}
