@@ -1779,3 +1779,34 @@ test('bulk assignment: auto, one route, unassign, groups and filling a route', (
   const regs = filled.message.split(': ')[1].replace('.', '').split(', ');
   assert.equal(new Set(regs).size, regs.length, 'each aircraft added once');
 });
+
+test('new route ideas for a selection, and opening a route with aircraft on it', () => {
+  const s = setup();
+  manual(s);
+  const narrow = [quickLease(s, 'a320n'), quickLease(s, 'a320n')];
+  const wide = quickLease(s, 'b789');
+  const ideas = G.newRouteIdeas(s, narrow.map((a) => a.id));
+  assert.ok(ideas.length > 0);
+  assert.ok(ideas.every((x) => x.profit > 0 && x.types.includes('a320n') && !s.routes.some((r) => r.b === x.b)));
+  const all = G.newRouteIdeas(s, []);
+  assert.ok(new Set(all.map((x) => x.best)).size >= 2, 'ideas for more than one type');
+  const top = ideas[0];
+  const res = G.openAndAssign(s, top.a, top.b, narrow.map((a) => a.id), top.freq);
+  assert.ok(res.ok, res.error);
+  assert.equal(G.routeFreq(s, res.route), top.freq, 'sized to the estimate, not every aircraft at full tilt');
+  // Busy aircraft: with move, one leaves its route for the new one.
+  const busy = quickLease(s, 'a320n');
+  const { route: old } = G.openRoute(s, 'DEN', 'SEA');
+  G.setFrequency(s, busy.id, old.id, G.maxFrequency(s, busy, old));
+  const next = G.newRouteIdeas(s, [busy.id])[0];
+  assert.ok(G.openAndAssign(s, next.a, next.b, [busy.id], next.freq).ok);
+  assert.equal(busy.schedule.some((e) => e.routeId === old.id), true, 'without move it stays put');
+  const third = G.newRouteIdeas(s, [busy.id])[0];
+  assert.ok(G.openAndAssign(s, third.a, third.b, [busy.id], third.freq, { move: true }).ok);
+  assert.ok(busy.schedule.every((e) => e.routeId !== old.id), 'with move it leaves');
+  assert.equal(wide.schedule.length, 0);
+  assert.equal(G.openAndAssign(s, top.a, top.b, []).ok, false, 'already flown');
+  const routes = s.routes.length;
+  assert.equal(G.openAndAssign(s, 'DEN', 'SYD', narrow.map((a) => a.id)).ok, false, 'out of range: not opened');
+  assert.equal(s.routes.length, routes);
+});

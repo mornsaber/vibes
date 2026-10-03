@@ -511,7 +511,10 @@ document.addEventListener('change', (e) => {
 // <details data-ui="key"> remember whether they're open across re-renders.
 document.addEventListener('toggle', (e) => {
   const key = e.target?.dataset?.ui;
-  if (key) ctx.ui[key] = e.target.open;
+  if (!key || ctx.ui[key] === e.target.open) return;
+  ctx.ui[key] = e.target.open;
+  // Sections whose content is only built while open re-render when toggled.
+  if (e.target.dataset.render) render();
 }, true);
 
 document.addEventListener('input', (e) => {

@@ -11,7 +11,7 @@ import {
 import { typeOf, isDelivered, monthlyLeaseRate, weeklyFromMonthly, isFreighter, fleetFamilies, FAMILY_OVERHEAD } from './fleet.js';
 import {
   blockHours, roundTripHours, weeklyHours, availableHours, scheduledHours, canOperate, maxFrequency, routeFreq, entryFreq,
-  openRoute, noiseBanned, routeById, plannedCapacity, setSchedule,
+  openRoute, noiseBanned, routeById, plannedCapacity, setSchedule, routeOpenCost,
 } from './network.js';
 import { MX_HR, NAV_KM, LANDING, serviceAppeal, marketingEffect } from './ops.js';
 import { weeklySalary, cockpitCrew, cabinCrewPerFlight, PILOT_HOURS, CABIN_HOURS, RESERVE } from './staff.js';
@@ -131,14 +131,16 @@ function routeOpportunity(state, route, freq) {
 // ---------------------------------------------------------------------------
 // Routes for one aircraft
 
-export function routesForAircraft(state, ac, { limit = 10, includeNew = true } = {}) {
+// newOnly: skip your existing routes. asIfFree: size new-route ideas as though
+// the aircraft had all its hours free (for planning a reassignment).
+export function routesForAircraft(state, ac, { limit = 10, includeNew = true, newOnly = false, asIfFree = false } = {}) {
   const type = typeOf(ac);
   if (isFreighter(type)) return [];
   const seats = seatCount(ac.config);
   const own = ownershipOf(state, ac);
-  const spare = availableHours(state, ac) - scheduledHours(state, ac);
+  const spare = asIfFree ? availableHours(state, ac) : availableHours(state, ac) - scheduledHours(state, ac);
   const out = [];
-  for (const r of state.routes) {
+  for (const r of newOnly ? [] : state.routes) {
     const flying = entryFreq(ac, r.id);
     const can = canOperate(state, ac, r);
     if (!can.ok) continue;
@@ -254,17 +256,85 @@ export function bulkAssignRoute(state, ids, routeId, freq = 0) {
 
 // Add your spare aircraft to a route one at a time, re-estimating after each,
 // while the next one still looks profitable.
-export function fillRoute(state, routeId, { max = 10 } = {}) {
+export function fillRoute(state, routeId, { max = 10, ids = null } = {}) {
   const r = routeById(state, routeId);
   if (!r) return fail('No such route');
   const added = [];
   for (let i = 0; i < max; i++) {
     // Each aircraft joins once; the next pick is re-estimated with it flying.
-    const best = aircraftForRoute(state, r, { limit: 20 }).own.find((x) => x.profit > 0 && !added.includes(x.reg));
+    const best = aircraftForRoute(state, r, { limit: 40 }).own.find((x) => x.profit > 0 && !added.includes(x.reg) && (!ids || ids.includes(x.acId)));
     if (!best || !assignSuggestion(state, best.acId, { routeId: r.id, freq: best.freq }).ok) break;
     added.push(best.reg);
   }
   return added.length ? ok({ message: `Added ${added.length} aircraft to ${r.a}–${r.b}: ${added.join(', ')}.` }) : fail('None of your spare aircraft would make money on this route');
+}
+
+// New route ideas for a set of aircraft (one of each type speaks for the
+// rest), merged by city pair, best estimated weekly result per aircraft first.
+export function newRouteIdeas(state, ids, { limit = 12 } = {}) {
+  const pool = (ids?.length ? state.fleet.filter((a) => ids.includes(a.id)) : state.fleet).filter((a) => !a.retired && !isFreighter(typeOf(a)));
+  const byType = new Map();
+  for (const ac of pool) if (!byType.has(ac.type)) byType.set(ac.type, ac);
+  const ideas = new Map();
+  for (const ac of byType.values()) {
+    for (const e of routesForAircraft(state, ac, { newOnly: true, asIfFree: true, limit: 15 })) {
+      if (e.kind !== 'new') continue;
+      const k = pairKey(e.a, e.b);
+      const cur = ideas.get(k);
+      if (!cur) ideas.set(k, { ...e, types: [ac.type], best: ac.type });
+      else {
+        cur.types.push(ac.type);
+        if (e.profit > cur.profit) Object.assign(cur, { ...e, types: cur.types, best: ac.type });
+      }
+    }
+  }
+  // The best few for each type, so big jets don't crowd out ideas for the small ones.
+  const per = Math.max(3, Math.ceil(limit / Math.max(1, byType.size)));
+  const ranked = [...ideas.values()].filter((x) => x.profit > 0).sort((a, b) => b.profit - a.profit);
+  const count = new Map();
+  const keep = ranked.filter((x) => {
+    const n = count.get(x.best) ?? 0;
+    count.set(x.best, n + 1);
+    return n < per;
+  });
+  return keep.slice(0, Math.max(limit, per * byType.size))
+    .map((x) => ({ ...x, cost: routeOpenCost(state, x.a, x.b), able: pool.filter((ac) => x.types.includes(ac.type)).length }));
+}
+
+// Open a route and staff it from the given aircraft. With a target weekly
+// frequency, assign just enough of them (spare hours first; with move, an
+// aircraft without room leaves its current routes). Without one, add them one at
+// a time while the next still looks profitable.
+export function openAndAssign(state, a, b, ids = [], freq = 0, { move = false } = {}) {
+  // Don't pay to launch a route none of the chosen aircraft can fly.
+  const probe = { id: '_probe', a, b, distance: distanceKm(a, b) };
+  const able = state.fleet.filter((x) => ids.includes(x.id) && isDelivered(state, x) && canOperate(state, x, probe).ok);
+  if (ids.length && !able.length) {
+    const first = state.fleet.find((x) => ids.includes(x.id));
+    return fail(`None of the selected aircraft can fly ${a}–${b}${first ? `: ${canOperate(state, first, probe).error ?? 'not yet delivered'}` : ''}`);
+  }
+  const res = openRoute(state, a, b);
+  if (!res.ok) return res;
+  const r = res.route;
+  if (!ids.length) return ok({ message: `Opened ${a}–${b}. Assign aircraft from the route page or let the autopilot do it.`, route: r });
+  if (!freq) {
+    const filled = fillRoute(state, r.id, { ids });
+    return ok({ message: `Opened ${a}–${b}. ${filled.ok ? filled.message : 'None of the selected aircraft has spare hours that would pay there — assign some from the route page.'}`, route: r });
+  }
+  let left = freq;
+  const used = [];
+  for (const ac of [...able].sort((x, y) => maxFrequency(state, y, r) - maxFrequency(state, x, r))) {
+    if (left <= 0) break;
+    if (maxFrequency(state, ac, r) < Math.min(3, left)) {
+      if (!move) continue;
+      setSchedule(state, ac, []);
+    }
+    const add = Math.min(left, maxFrequency(state, ac, r));
+    if (add < 1 || !autoAssign(state, ac, r, add).ok) continue;
+    left -= entryFreq(ac, r.id);
+    used.push(ac.reg);
+  }
+  return ok({ message: used.length ? `Opened ${a}–${b}: ${used.join(', ')} fl${used.length > 1 ? 'y' : 'ies'} ${freq - Math.max(0, left)}× a week.` : `Opened ${a}–${b}, but none of the selected aircraft had room.`, route: r });
 }
 
 export function bulkUnassign(state, ids) {

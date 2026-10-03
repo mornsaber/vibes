@@ -1,4 +1,4 @@
-import { G, esc, money, pct, int, num, kpi, panel, table, tabs, options, statement, bar, pill, ap, typeName, statusPill, checkCell, liverySvg } from '../util.js';
+import { G, airportOptions, esc, money, pct, int, num, kpi, panel, table, tabs, options, statement, bar, pill, ap, typeName, statusPill, checkCell, liverySvg } from '../util.js';
 import { formValues } from '../app.js';
 
 const CAT_OPTS = [['all', 'All types'], ...Object.entries(G.CATEGORY_LABELS)];
@@ -109,7 +109,46 @@ function aircraft(c) {
       ${sel.size ? `<button class="small ghost" data-action="sel-clear">None</button>` : ''}
     </div>
     ${sel.size ? bulkBar(s, sel) : ''}
-    ${fleetTable(s, shown, { select: sel, empty: s.fleet.length ? 'No aircraft match these filters.' : undefined })}`)}`;
+    ${fleetTable(s, shown, { select: sel, empty: s.fleet.length ? 'No aircraft match these filters.' : undefined })}`)}
+  ${newRoutesPanel(c, sel)}`;
+}
+
+// Open new routes without leaving the fleet: ideas for the selection (or one of
+// each type), plus a free-form opener. Computed only while the panel is open.
+function newRoutesPanel(c, sel) {
+  const s = c.state;
+  const open = c.ui.routeIdeasOpen ?? false;
+  const ids = [...sel];
+  const selTypes = [...new Set(s.fleet.filter((a) => sel.has(a.id)).map((a) => a.type))];
+  const basis = ids.length ? `${ids.length} selected aircraft (${selTypes.map(typeName).join(', ')})` : 'your fleet — one of each type, as if it had all its hours free';
+  let body = '';
+  if (open) {
+    const ideas = G.newRouteIdeas(s, ids, { limit: 12 });
+    body = `<p class="muted small">Ideas for ${esc(basis)}. Estimates use today's demand, rival fares and your costs at an 85% target load, per aircraft.</p>
+    ${table(ideas, [
+      { h: 'Route', v: (x) => `<b>${x.a}–${x.b}</b> <small class="muted">${esc(ap(x.b).city)} · ${int(x.distance)} km</small>` },
+      { h: 'Best with', v: (x) => `${esc(typeName(x.best))}${x.types.length > 1 ? ` <small class="muted">+${x.types.length - 1} more type${x.types.length > 2 ? 's' : ''}</small>` : ''}` },
+      { h: 'Trips/wk', cls: 'num', v: (x) => x.freq },
+      { h: 'Est. load', cls: 'num', v: (x) => pct(x.lf) },
+      { h: 'Est. profit/wk', cls: 'num', v: (x) => `<span class="good">${money(x.profit)}</span>` },
+      { h: 'Launch', cls: 'num', v: (x) => money(x.cost) },
+      { h: '', cls: 'num', v: (x) => {
+        // Enough of the selection to cover the estimate: one with spare hours, else one moves.
+        const able = s.fleet.filter((a) => sel.has(a.id) && x.types.includes(a.type) && G.isDelivered(s, a));
+        const room = able.some((a) => spareHours(s, a) >= Math.min(3, x.freq) * G.roundTripHours(G.typeOf(a), x.distance));
+        const btn = able.length ? `<button class="small primary" data-action="fleet-open-route" data-a="${x.a}" data-b="${x.b}" data-assign="1" data-move="${room ? '' : 1}" data-freq="${x.freq}" title="${room ? `Open it and fly ${x.freq}× a week with selected aircraft that have spare hours` : `None of the selected has room: one will leave its current routes to fly this ${x.freq}× a week`}">${room ? 'Open & assign' : 'Open & move 1'}</button>` : '';
+        return `<div class="row nowrap">${btn}<button class="small" data-action="fleet-open-route" data-a="${x.a}" data-b="${x.b}">Open</button></div>`;
+      } },
+    ], { empty: 'No new route from your hubs looks profitable for these aircraft right now.' })}
+    <h3>Open any route</h3>
+    <div class="row" data-form>
+      <select name="a" aria-label="From">${airportOptions(s.hubs.map((h) => h.code), s.hubs[0].code)}</select> →
+      <select name="b" aria-label="To">${airportOptions(G.AIRPORTS.map((x) => x.code).filter((x) => !s.hubs.some((h) => h.code === x) && !s.routes.some((r) => (r.a === s.hubs[0].code && r.b === x) || (r.b === s.hubs[0].code && r.a === x))), '', 'Destination…')}</select>
+      ${ids.length ? `<label class="check small"><input type="checkbox" name="assign" checked> assign the ${ids.length} selected</label>` : ''}
+      <button class="small primary" data-action="fleet-open-manual">Open route</button>
+    </div>`;
+  }
+  return panel('', `<details ${open ? 'open' : ''} data-ui="routeIdeasOpen" data-render="1"><summary><b>Open new routes</b> <small class="muted">ideas for ${ids.length ? 'the selected aircraft' : 'your fleet'}, or any city pair</small></summary>${body}</details>`);
 }
 
 function bulkBar(s, sel) {
@@ -542,6 +581,15 @@ Object.assign(actions, {
   },
   'sel-clear': (el, ctx) => {
     ctx.ui.fleetSel = [];
+  },
+  'fleet-open-route': (el, ctx) => {
+    if (el.dataset.move && !confirm('None of the selected aircraft has room, so one will leave its current routes for this one. Continue?')) return null;
+    return G.openAndAssign(ctx.game, el.dataset.a, el.dataset.b, el.dataset.assign ? pickIds(ctx) : [], Number(el.dataset.freq) || 0, { move: !!el.dataset.move });
+  },
+  'fleet-open-manual': (el, ctx) => {
+    const v = formValues(el);
+    if (!v.b) return { ok: false, error: 'Pick a destination' };
+    return G.openAndAssign(ctx.game, v.a, v.b, v.assign ? pickIds(ctx) : []);
   },
   'bulk-auto': (el, ctx) => G.bulkAutoAssign(ctx.game, pickIds(ctx)),
   'bulk-route': (el, ctx) => {
