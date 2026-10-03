@@ -11,7 +11,7 @@ import {
 import { typeOf, isDelivered, monthlyLeaseRate, weeklyFromMonthly, isFreighter, fleetFamilies, FAMILY_OVERHEAD } from './fleet.js';
 import {
   blockHours, roundTripHours, weeklyHours, availableHours, scheduledHours, canOperate, maxFrequency, routeFreq, entryFreq,
-  openRoute, noiseBanned, routeById, plannedCapacity,
+  openRoute, noiseBanned, routeById, plannedCapacity, setSchedule,
 } from './network.js';
 import { MX_HR, NAV_KM, LANDING, serviceAppeal, marketingEffect } from './ops.js';
 import { weeklySalary, cockpitCrew, cabinCrewPerFlight, PILOT_HOURS, CABIN_HOURS, RESERVE } from './staff.js';
@@ -206,6 +206,75 @@ export function autoAssignIdle(state) {
   let n = 0;
   for (const ac of idle) if (autoAssignAircraft(state, ac.id).ok) n += 1;
   return n ? ok({ message: `Assigned ${n} of ${idle.length} idle aircraft.` }) : fail(idle.length ? 'No profitable routes found for the idle aircraft' : 'No idle aircraft');
+}
+
+// ---------------------------------------------------------------------------
+// Bulk assignment for a selection of aircraft.
+
+const selected = (state, ids) => state.fleet.filter((a) => ids.includes(a.id));
+
+// Each selected aircraft with spare hours goes to its best route.
+export function bulkAutoAssign(state, ids) {
+  const list = selected(state, ids).filter((ac) => isDelivered(state, ac) && !ac.retired && !isFreighter(typeOf(ac)));
+  let n = 0;
+  for (const ac of list) {
+    if (availableHours(state, ac) - scheduledHours(state, ac) < 4) continue;
+    if (autoAssignAircraft(state, ac.id).ok) n += 1;
+  }
+  return n ? ok({ message: `Assigned ${n} of ${list.length} selected aircraft.` }) : fail('None of the selected aircraft found a profitable route');
+}
+
+// Put every selected aircraft on one route, each flying up to `freq` (or as much as it can).
+export function bulkAssignRoute(state, ids, routeId, freq = 0) {
+  const r = routeById(state, routeId);
+  if (!r) return fail('Pick a route');
+  const list = selected(state, ids);
+  let n = 0;
+  const why = new Map();
+  for (const ac of list) {
+    const can = canOperate(state, ac, r);
+    if (!can.ok) {
+      why.set(can.error, (why.get(can.error) ?? 0) + 1);
+      continue;
+    }
+    const current = entryFreq(ac, r.id);
+    const room = maxFrequency(state, ac, r);
+    const add = Math.min(room, freq > 0 ? freq : room);
+    if (add < 1) {
+      why.set('No spare hours', (why.get('No spare hours') ?? 0) + 1);
+      continue;
+    }
+    const res = autoAssign(state, ac, r, current + add, current);
+    if (res.ok) n += 1;
+    else why.set(res.error, (why.get(res.error) ?? 0) + 1);
+  }
+  const note = [...why].map(([k, v]) => `${v}: ${k}`).join('; ');
+  return n ? ok({ message: `${n} of ${list.length} aircraft now fly ${r.a}–${r.b}.${note ? ` Skipped — ${note}.` : ''}` }) : fail(note || 'Nothing assigned');
+}
+
+// Add your spare aircraft to a route one at a time, re-estimating after each,
+// while the next one still looks profitable.
+export function fillRoute(state, routeId, { max = 10 } = {}) {
+  const r = routeById(state, routeId);
+  if (!r) return fail('No such route');
+  const added = [];
+  for (let i = 0; i < max; i++) {
+    // Each aircraft joins once; the next pick is re-estimated with it flying.
+    const best = aircraftForRoute(state, r, { limit: 20 }).own.find((x) => x.profit > 0 && !added.includes(x.reg));
+    if (!best || !assignSuggestion(state, best.acId, { routeId: r.id, freq: best.freq }).ok) break;
+    added.push(best.reg);
+  }
+  return added.length ? ok({ message: `Added ${added.length} aircraft to ${r.a}–${r.b}: ${added.join(', ')}.` }) : fail('None of your spare aircraft would make money on this route');
+}
+
+export function bulkUnassign(state, ids) {
+  let n = 0;
+  for (const ac of selected(state, ids)) {
+    if (!ac.schedule.length) continue;
+    setSchedule(state, ac, []);
+    n += 1;
+  }
+  return n ? ok({ message: `Cleared the schedules of ${n} aircraft.` }) : fail('None of the selected aircraft were scheduled');
 }
 
 // ---------------------------------------------------------------------------

@@ -1733,3 +1733,49 @@ test('thinly covered markets get local competition, well covered ones do not', (
   const us = setup();
   assert.equal(G.localCompetition(us, 'ORD', 'DEN', 'Y', G.rivalsContext(us, { memo: false })), 0);
 });
+
+// ---------------------------------------------------------------------------
+// Bulk fleet actions.
+
+test('bulk sell and return: quote first, loans repaid from the proceeds', () => {
+  const s = setup();
+  manual(s);
+  const a = G.makeAircraft(s, 'a320n', { owned: true, ageWeeks: 300 });
+  const b = G.makeAircraft(s, 'a320n', { owned: true, ageWeeks: 300 });
+  const c = quickLease(s, 'a320n');
+  assert.ok(G.takeSecuredLoan(s, b.id).ok);
+  const loan = s.loans.find((l) => l.aircraftId === b.id).principal;
+  const q = G.bulkDisposalQuote(s, [a.id, b.id, c.id]);
+  assert.equal(q.sold, 2);
+  assert.equal(q.returned, 1);
+  assert.ok(Math.abs(q.loans - loan) < 1);
+  const cash = s.cash;
+  assert.ok(G.bulkDispose(s, [a.id, b.id, c.id]).ok);
+  assert.equal(s.fleet.length, 0);
+  assert.ok(!s.loans.some((l) => l.aircraftId === b.id), 'secured loan repaid');
+  assert.ok(Math.abs(s.cash - cash - q.cash) < 1, 'cash moves by the quote');
+  assert.equal(G.bulkDispose(s, []).ok, false);
+});
+
+test('bulk assignment: auto, one route, unassign, groups and filling a route', () => {
+  const s = setup();
+  manual(s);
+  const { route } = G.openRoute(s, 'DEN', 'LAX');
+  G.openRoute(s, 'DEN', 'SEA');
+  const ids = [quickLease(s, 'a320n'), quickLease(s, 'a320n'), quickLease(s, 'a320n')].map((a) => a.id);
+  const res = G.bulkAssignRoute(s, ids, route.id, 4);
+  assert.ok(res.ok, res.error);
+  for (const id of ids) assert.equal(G.entryFreq(s.fleet.find((a) => a.id === id), route.id), 4);
+  assert.ok(G.bulkUnassign(s, ids).ok);
+  assert.ok(s.fleet.every((a) => !a.schedule.length));
+  assert.ok(G.bulkAutoAssign(s, ids).ok);
+  assert.ok(s.fleet.some((a) => a.schedule.length));
+  assert.ok(G.bulkSetGroup(s, ids, 'Shuttle').ok);
+  assert.ok(s.fleet.every((a) => a.group === 'Shuttle'));
+  G.bulkUnassign(s, ids);
+  const filled = G.fillRoute(s, route.id);
+  assert.ok(filled.ok, filled.error);
+  assert.ok(G.routeFreq(s, route) > 0);
+  const regs = filled.message.split(': ')[1].replace('.', '').split(', ');
+  assert.equal(new Set(regs).size, regs.length, 'each aircraft added once');
+});

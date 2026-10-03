@@ -32,8 +32,13 @@ export function acLivery(s, ac) {
 }
 const layout = (ac) => [...G.CLASSES.filter((k) => ac.config[k]).map((k) => `${k}${ac.config[k]}`), ac.config.C ? `+${ac.config.C} t combi` : ''].filter(Boolean).join(' ');
 
-export function fleetTable(s, list, { empty } = {}) {
+export function fleetTable(s, list, { empty, select } = {}) {
+  const pick = select ? [{
+    h: `<input type="checkbox" data-change="fleet-pick-all" aria-label="Select all shown" ${list.length && list.every((a) => select.has(a.id)) ? 'checked' : ''}>`,
+    v: (ac) => `<input type="checkbox" data-change="fleet-pick" data-id="${ac.id}" aria-label="Select ${ac.reg}" ${select.has(ac.id) ? 'checked' : ''}>`,
+  }] : [];
   return table(list, [
+    ...pick,
     { h: '', v: (ac) => liverySvg(acLivery(s, ac), { size: 20 }) },
     { h: 'Reg', v: (ac) => `<a href="#fleet/ac/${ac.id}"><b>${ac.reg}</b></a>${ac.group ? `<br><small class="muted">${esc(ac.group)}</small>` : ''}` },
     { h: 'Type', v: (ac) => `${esc(typeName(ac.type))}<br><small class="muted">${G.typeOf(ac).range.toLocaleString()} km range</small>` },
@@ -47,17 +52,86 @@ export function fleetTable(s, list, { empty } = {}) {
   ], { empty: empty ?? 'No aircraft. Visit "Acquire aircraft".' });
 }
 
+// ---------------------------------------------------------------------------
+// Fleet list with filters and bulk actions.
+
+const STATUS_FILTERS = [['all', 'Any status'], ['spare', 'Idle or spare hours'], ['idle', 'Idle'], ['flying', 'In service'], ['shop', 'In the shop'], ['grounded', 'Grounded'], ['delivery', 'Arriving'], ['old', '20+ years old']];
+const spareHours = (s, ac) => G.availableHours(s, ac) - G.scheduledHours(s, ac);
+function matches(s, ac, f) {
+  const st = G.statusOf(s, ac).key;
+  if (f.status === 'spare' && !(G.isDelivered(s, ac) && !ac.retired && spareHours(s, ac) >= 10)) return false;
+  if (f.status === 'old' && G.ageYears(s, ac) < 20) return false;
+  if (!['all', 'spare', 'old'].includes(f.status) && st !== f.status) return false;
+  if (f.type && f.type !== 'all' && ac.type !== f.type) return false;
+  if (f.terms === 'owned' && !ac.owned) return false;
+  if (f.terms === 'leased' && ac.owned) return false;
+  if (f.group && f.group !== 'all' && (ac.group ?? '') !== (f.group === '_none' ? '' : f.group)) return false;
+  if (f.route && f.route !== 'all' && !ac.schedule.some((e) => e.routeId === f.route)) return false;
+  return true;
+}
+const selection = (c) => {
+  const ids = new Set(c.state.fleet.map((a) => a.id));
+  c.ui.fleetSel = (c.ui.fleetSel ?? []).filter((id) => ids.has(id)); // drop aircraft that have gone
+  return new Set(c.ui.fleetSel);
+};
+
 function aircraft(c) {
   const s = c.state;
   const owned = s.fleet.filter((a) => a.owned).length;
   const avgAge = s.fleet.length ? s.fleet.reduce((t, a) => t + G.ageYears(s, a), 0) / s.fleet.length : 0;
+  const f = (c.ui.fleetFilter ??= { status: 'all', type: 'all', terms: 'all', group: 'all', route: 'all' });
+  const shown = s.fleet.filter((ac) => matches(s, ac, f));
+  const sel = selection(c);
+  const types = [...new Set(s.fleet.map((a) => a.type))];
+  const groups = [...new Set(s.fleet.map((a) => a.group).filter(Boolean))];
+  const flown = s.routes.filter((r) => s.fleet.some((a) => a.schedule.some((e) => e.routeId === r.id)));
+  const filter = (k, opts) => `<select data-change="fleet-filter" data-key="${k}">${options(opts, f[k])}</select>`;
+  const spare = s.fleet.filter((ac) => matches(s, ac, { status: 'spare' }));
   return `<div class="grid kpis">
     ${kpi('Aircraft', s.fleet.length)}
     ${kpi('Owned / leased', `${owned} / ${s.fleet.length - owned}`)}
     ${kpi('Average age', `${num(avgAge, 1)} yrs`)}
     ${kpi('Fleet value (owned)', money(G.ownedFleetValue(s)))}
     ${kpi('On order', s.orders.length, { href: '#fleet/orders' })}
-  </div>${panel('All aircraft', fleetTable(s, s.fleet))}`;
+  </div>
+  ${panel(`Aircraft${shown.length !== s.fleet.length ? ` — ${shown.length} of ${s.fleet.length} shown` : ''}`, `
+    <div class="row filters">
+      ${filter('status', STATUS_FILTERS)}
+      ${filter('type', [['all', 'Any type'], ...types.map((t) => [t, typeName(t)])])}
+      ${filter('terms', [['all', 'Owned & leased'], ['owned', 'Owned'], ['leased', 'Leased']])}
+      ${groups.length ? filter('group', [['all', 'Any group'], ['_none', 'No group'], ...groups.map((g) => [g, g])]) : ''}
+      ${flown.length ? filter('route', [['all', 'Any route'], ...flown.map((r) => [r.id, `${r.a}–${r.b}`])]) : ''}
+      ${Object.values(f).some((v) => v !== 'all') ? '<button class="small ghost" data-action="fleet-filter-reset">Reset</button>' : ''}
+    </div>
+    <div class="row small quick-pick">Select:
+      <button class="small" data-action="sel-shown" ${shown.length ? '' : 'disabled'}>All shown (${shown.length})</button>
+      <button class="small" data-action="sel-spare" ${spare.length ? '' : 'disabled'}>Idle or spare hours (${spare.length})</button>
+      ${sel.size ? `<button class="small ghost" data-action="sel-clear">None</button>` : ''}
+    </div>
+    ${sel.size ? bulkBar(s, sel) : ''}
+    ${fleetTable(s, shown, { select: sel, empty: s.fleet.length ? 'No aircraft match these filters.' : undefined })}`)}`;
+}
+
+function bulkBar(s, sel) {
+  const ids = [...sel];
+  const q = G.bulkDisposalQuote(s, ids);
+  const list = s.fleet.filter((a) => sel.has(a.id));
+  // Routes at least one selected aircraft can fly, longest first.
+  const routes = s.routes.filter((r) => list.some((ac) => G.canOperate(s, ac, r).ok)).sort((a, b) => b.distance - a.distance);
+  return `<div class="bulkbar" data-form>
+    <div class="row"><b>${sel.size} selected</b>
+      <button class="small primary" data-action="bulk-auto" title="Each selected aircraft with spare hours goes to its best-estimated route">Auto-assign</button>
+      ${routes.length ? `<select name="route" aria-label="Route">${options(routes.map((r) => [r.id, `${r.a}–${r.b} (${int(r.distance)} km)`]))}</select>
+      <input type="number" name="freq" min="0" placeholder="max" class="w-60" title="Weekly round trips per aircraft (blank = as many as it can)">
+      <button class="small" data-action="bulk-route">Assign to route</button>` : '<span class="muted small">None of these can fly your routes.</span>'}
+      <button class="small" data-action="bulk-unassign">Unassign</button>
+    </div>
+    <div class="row">
+      <input name="group" placeholder="Group name" class="w-140"><button class="small" data-action="bulk-group">Set group</button>
+      <button class="small danger" data-action="bulk-dispose">${q.sold && q.returned ? 'Sell / return' : q.sold ? 'Sell' : 'Return'} ${q.count} (${q.cash >= 0 ? '+' : '−'}${money(Math.abs(q.cash))})</button>
+      <small class="muted">${[q.sold && `${q.sold} sold at 95% of market value${q.loans ? `, repaying ${money(q.loans)} of secured loans` : ''}`, q.returned && `${q.returned} lease${q.returned > 1 ? 's' : ''} ended early (${money(q.penalties)} in penalties)`].filter(Boolean).join(' · ')}</small>
+    </div>
+  </div>`;
 }
 
 function groups(c) {
@@ -453,7 +527,54 @@ export const actions = {
   'live:cfg': (el, ctx) => updateCabinEditor(el.closest('[data-form]'), ctx),
 };
 
+const pickIds = (ctx) => ctx.ui.fleetSel ?? [];
+const done = (ctx, res) => (res?.ok ? ((ctx.ui.fleetSel = []), res) : res);
+Object.assign(actions, {
+  'fleet-filter-reset': (el, ctx) => {
+    ctx.ui.fleetFilter = { status: 'all', type: 'all', terms: 'all', group: 'all', route: 'all' };
+  },
+  'sel-shown': (el, ctx) => {
+    const f = ctx.ui.fleetFilter ?? {};
+    ctx.ui.fleetSel = [...new Set([...pickIds(ctx), ...ctx.game.fleet.filter((ac) => matches(ctx.game, ac, { status: 'all', type: 'all', terms: 'all', group: 'all', route: 'all', ...f })).map((a) => a.id)])];
+  },
+  'sel-spare': (el, ctx) => {
+    ctx.ui.fleetSel = ctx.game.fleet.filter((ac) => matches(ctx.game, ac, { status: 'spare' })).map((a) => a.id);
+  },
+  'sel-clear': (el, ctx) => {
+    ctx.ui.fleetSel = [];
+  },
+  'bulk-auto': (el, ctx) => G.bulkAutoAssign(ctx.game, pickIds(ctx)),
+  'bulk-route': (el, ctx) => {
+    const v = formValues(el);
+    return G.bulkAssignRoute(ctx.game, pickIds(ctx), v.route, Number(v.freq) || 0);
+  },
+  'bulk-unassign': (el, ctx) => (confirm(`Clear the schedules of ${pickIds(ctx).length} aircraft?`) ? G.bulkUnassign(ctx.game, pickIds(ctx)) : null),
+  'bulk-group': (el, ctx) => G.bulkSetGroup(ctx.game, pickIds(ctx), formValues(el).group),
+  'bulk-dispose': (el, ctx) => {
+    const q = G.bulkDisposalQuote(ctx.game, pickIds(ctx));
+    const what = [q.sold && `sell ${q.sold} owned`, q.returned && `return ${q.returned} leased`].filter(Boolean).join(' and ');
+    if (!confirm(`${what[0].toUpperCase()}${what.slice(1)} aircraft for a net ${q.cash >= 0 ? 'gain' : 'cost'} of ${G.money(Math.abs(q.cash))}? This can't be undone (except with ↶ revert).`)) return null;
+    return done(ctx, G.bulkDispose(ctx.game, pickIds(ctx)));
+  },
+});
+
 export const changes = {
+  'fleet-filter': (el, ctx) => {
+    (ctx.ui.fleetFilter ??= {})[el.dataset.key] = el.value;
+  },
+  'fleet-pick': (el, ctx) => {
+    const set = new Set(pickIds(ctx));
+    if (el.checked) set.add(el.dataset.id);
+    else set.delete(el.dataset.id);
+    ctx.ui.fleetSel = [...set];
+  },
+  'fleet-pick-all': (el, ctx) => {
+    const f = { status: 'all', type: 'all', terms: 'all', group: 'all', route: 'all', ...(ctx.ui.fleetFilter ?? {}) };
+    const shown = ctx.game.fleet.filter((ac) => matches(ctx.game, ac, f)).map((a) => a.id);
+    const set = new Set(pickIds(ctx));
+    for (const id of shown) el.checked ? set.add(id) : set.delete(id);
+    ctx.ui.fleetSel = [...set];
+  },
   'market-cat': (el, ctx) => (ctx.ui.marketCat = el.value),
   'show-ended': (el, ctx) => (ctx.ui.showEnded = el.checked),
 };

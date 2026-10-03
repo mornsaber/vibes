@@ -230,7 +230,7 @@ function aircraftFinder(s, route) {
       { h: 'Est. load', cls: 'num', v: (x) => pct(x.lf) },
       { h: 'Est. profit/wk', cls: 'num', v: est },
       { h: '', cls: 'num', v: (x) => `<button class="small ${x.profit > 0 ? 'primary' : ''}" data-action="fit-assign" data-ac="${x.acId}" data-route="${route.id}" data-a="${route.a}" data-b="${route.b}" data-freq="${x.freq}">Assign</button>` },
-    ], { empty: 'None of your aircraft has the range, runway and spare hours for this route.' }))}
+    ], { empty: 'None of your aircraft has the range, runway and spare hours for this route.' }), { actions: own.filter((x) => x.profit > 0).length > 1 ? `<button class="small primary" data-action="fill-route" data-route="${route.id}" title="Adds spare aircraft one at a time while the next still looks profitable">Add all that pay</button>` : '' })}
     ${panel('Aircraft to acquire for it', `${table(acquire, [
       { h: 'Type', v: (x) => `<b>${esc(typeName(x.type))}</b>${x.newFamily ? ' <small class="pill warn" title="Adds a new aircraft family: extra crews, spares and overhead (included in the estimate)">New family</small>' : ''}<br><small class="muted">${x.seats} seats · ${int(G.aircraftById[x.type].range)} km</small>` },
       { h: 'Trips/wk', cls: 'num', v: (x) => x.freq },
@@ -241,6 +241,7 @@ function aircraftFinder(s, route) {
 }
 
 export const actions = {
+  'fill-route': (el, ctx) => G.fillRoute(ctx.game, el.dataset.route),
   'open-route'(el, ctx) {
     const res = G.openRoute(ctx.game, el.dataset.a, el.dataset.b);
     if (res.ok) {

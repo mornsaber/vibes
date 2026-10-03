@@ -479,6 +479,70 @@ export function productQuality(ac) {
 }
 
 // Simple fleet groups for the Fleet > Groups view.
+// ---------------------------------------------------------------------------
+// Bulk disposal: sell owned aircraft (repaying any loan secured on them from the
+// proceeds) and hand leased ones back early, with a quote before you commit.
+
+export function disposalQuote(state, ac) {
+  if (ac.owned) {
+    const value = aircraftValue(state, ac) * 0.95;
+    const loan = sum(state.loans.filter((l) => l.aircraftId === ac.id), (l) => l.principal);
+    return { kind: 'sell', cash: value - loan, value, loan };
+  }
+  const remainingMonths = Math.max(0, ((ac.lease.endWeek - state.week) * 12) / 52);
+  const penalty = isDelivered(state, ac) ? remainingMonths * ac.lease.monthly * 0.3 : ac.lease.deposit;
+  const refund = isDelivered(state, ac) && ac.reliability > 70 && !checkOverdue(state, ac, 'C') ? ac.lease.deposit : 0;
+  return { kind: 'return', cash: refund - penalty, penalty, refund };
+}
+
+export function bulkDisposalQuote(state, ids) {
+  const list = state.fleet.filter((a) => ids.includes(a.id));
+  const quotes = list.map((ac) => ({ ac, ...disposalQuote(state, ac) }));
+  return {
+    count: list.length,
+    sold: quotes.filter((q) => q.kind === 'sell').length,
+    returned: quotes.filter((q) => q.kind === 'return').length,
+    cash: sum(quotes, (q) => q.cash),
+    loans: sum(quotes, (q) => q.loan ?? 0),
+    penalties: sum(quotes, (q) => q.penalty ?? 0),
+  };
+}
+
+export function bulkDispose(state, ids) {
+  const q = bulkDisposalQuote(state, ids);
+  if (!q.count) return fail('Select some aircraft first');
+  if (state.cash + q.cash < 0) return fail(`That would leave you ${money(-(state.cash + q.cash))} short`);
+  for (const ac of state.fleet.filter((a) => ids.includes(a.id))) {
+    if (ac.owned) {
+      // Pay off the secured loan from the sale proceeds.
+      for (const l of state.loans.filter((x) => x.aircraftId === ac.id)) {
+        state.cash -= l.principal;
+        state.loans = state.loans.filter((x) => x !== l);
+      }
+      const value = aircraftValue(state, ac) * 0.95;
+      state.cash += value;
+      state.ledgerCapex.aircraft -= value;
+      removeAircraft(state, ac);
+    } else {
+      const d = disposalQuote(state, ac);
+      state.cash += d.cash;
+      removeAircraft(state, ac);
+    }
+  }
+  const parts = [q.sold && `sold ${q.sold}`, q.returned && `returned ${q.returned} leased`].filter(Boolean).join(' and ');
+  log(state, `Fleet clear-out: ${parts} aircraft, net ${q.cash >= 0 ? '+' : '−'}${money(Math.abs(q.cash))}${q.loans ? ` after repaying ${money(q.loans)} of secured loans` : ''}.`, q.cash >= 0 ? 'info' : 'bad', 'fleet');
+  return ok({ message: `${parts[0].toUpperCase()}${parts.slice(1)} aircraft (net ${q.cash >= 0 ? '+' : '−'}${money(Math.abs(q.cash))}).`, ...q });
+}
+
+export function bulkSetGroup(state, ids, group) {
+  let n = 0;
+  for (const ac of state.fleet) if (ids.includes(ac.id)) {
+    ac.group = group?.trim() || null;
+    n += 1;
+  }
+  return n ? ok({ message: group?.trim() ? `${n} aircraft now in “${group.trim()}”.` : `Removed ${n} aircraft from their groups.` }) : fail('Select some aircraft first');
+}
+
 export function setGroup(state, acId, group) {
   const ac = state.fleet.find((a) => a.id === acId);
   if (!ac) return fail('No such aircraft');

@@ -433,3 +433,11 @@ td.wrap { white-space: normal; min-width: 180px; }
 .goal .bar, .goal .bar.low, .goal .bar.mid { width: 100%; }
 .goal .bar > span, .goal .bar.low > span, .goal .bar.mid > span { background: var(--accent); }
 @media (min-width: 861px) { .celebrate { justify-content: flex-end; padding: 80px 24px 16px; } }
+
+/* Fleet filters and bulk actions */
+.filters { margin-bottom: 8px; }
+.filters select { max-width: 200px; }
+.quick-pick { margin-bottom: 8px; color: var(--muted); }
+.bulkbar { position: sticky; top: 64px; z-index: 5; display: grid; gap: 6px; padding: 10px 12px; margin-bottom: 10px; border: 1px solid var(--accent); border-radius: 10px; background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+.bulkbar select { max-width: 240px; }
+@media (max-width: 860px) { .bulkbar { top: 120px; } }
